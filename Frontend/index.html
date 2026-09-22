@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Delegation System</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <div class="container">
+
+        <h1>Delegation System</h1>
+
+        <!-- TABS -->
+
+        <div class="tabs">
+
+            <button
+                class="tab active"
+                onclick="showSection('addTask', this)">
+                Add New Task
+            </button>
+
+            <button
+                class="tab"
+                onclick="showSection('followUp', this)">
+                Follow Up
+            </button>
+
+            <button
+                class="tab"
+                onclick="showSection('pendingTasks', this)">
+                All Pending Tasks
+            </button>
+
+        </div>
+
+
+        <!-- ========================= -->
+        <!-- ADD NEW TASK -->
+        <!-- ========================= -->
+
+        <section id="addTask" class="section">
+
+            <div class="form-row">
+
+                <select id="doerSelect">
+
+                    <option value="">
+                        Select Doer
+                    </option>
+
+                </select>
+
+
+                <input
+                    type="date"
+                    id="plannedDate"
+                    placeholder="Select Planned Date">
+
+            </div>
+
+
+            <textarea
+                id="taskDescription"
+                placeholder="Describe the task in detail">
+            </textarea>
+
+
+            <button
+                class="submit-btn"
+                onclick="addTask()">
+
+                Submit
+
+            </button>
+
+
+            <div id="addMessage"></div>
+
+        </section>
+
+
+        <!-- ========================= -->
+        <!-- FOLLOW UP -->
+        <!-- ========================= -->
+
+        <section
+            id="followUp"
+            class="section"
+            style="display:none;">
+
+            <h2>Today's Tasks</h2>
+
+            <div id="todayTasks"></div>
+
+        </section>
+
+
+        <!-- ========================= -->
+        <!-- ALL PENDING TASKS -->
+        <!-- ========================= -->
+
+        <section
+            id="pendingTasks"
+            class="section"
+            style="display:none;">
+
+            <input
+                type="text"
+                id="searchName"
+                placeholder="Search Name..."
+                onkeyup="filterTasks()">
+
+
+            <input
+                type="text"
+                id="searchTask"
+                placeholder="Search Task..."
+                onkeyup="filterTasks()">
+
+
+            <div class="table-wrapper">
+
+                <table>
+
+                    <thead>
+
+                        <tr>
+
+                            <th>id</th>
+
+                            <th>Name</th>
+
+                            <th>Task</th>
+
+                            <th>Planned<br>Date</th>
+
+                            <th></th>
+
+                            <th></th>
+
+                        </tr>
+
+                    </thead>
+
+                    <tbody id="taskTable">
+
+                    </tbody>
+
+                </table>
+
+            </div>
+
+        </section>
+
+    </div>
+
+
+    <script src="app.js"></script>
+
+</body>
+
+</html>
