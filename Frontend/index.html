@@ -14,9 +14,16 @@
 
     <div class="container">
 
+        <!-- ========================= -->
+        <!-- HEADER -->
+        <!-- ========================= -->
+
         <h1>Delegation System</h1>
 
+
+        <!-- ========================= -->
         <!-- TABS -->
+        <!-- ========================= -->
 
         <div class="tabs">
 
@@ -49,6 +56,8 @@
 
             <div class="form-row">
 
+                <!-- DOER -->
+
                 <select id="doerSelect">
 
                     <option value="">
@@ -58,19 +67,23 @@
                 </select>
 
 
+                <!-- PLANNED DATE -->
+
                 <input
                     type="date"
-                    id="plannedDate"
-                    placeholder="Select Planned Date">
+                    id="plannedDate">
 
             </div>
 
 
+            <!-- TASK DESCRIPTION -->
+
             <textarea
                 id="taskDescription"
-                placeholder="Describe the task in detail">
-            </textarea>
+                placeholder="Describe the task in detail"></textarea>
 
+
+            <!-- SUBMIT -->
 
             <button
                 class="submit-btn"
@@ -80,6 +93,8 @@
 
             </button>
 
+
+            <!-- MESSAGE -->
 
             <div id="addMessage"></div>
 
@@ -93,9 +108,9 @@
         <section
             id="followUp"
             class="section"
-            style="display:none;">
+            style="display: none;">
 
-            <h2>Today's Tasks</h2>
+            <h2>Today's Follow Up</h2>
 
             <div id="todayTasks"></div>
 
@@ -109,7 +124,9 @@
         <section
             id="pendingTasks"
             class="section"
-            style="display:none;">
+            style="display: none;">
+
+            <!-- SEARCH BY NAME -->
 
             <input
                 type="text"
@@ -118,12 +135,16 @@
                 onkeyup="filterTasks()">
 
 
+            <!-- SEARCH BY TASK -->
+
             <input
                 type="text"
                 id="searchTask"
                 placeholder="Search Task..."
                 onkeyup="filterTasks()">
 
+
+            <!-- TASK TABLE -->
 
             <div class="table-wrapper">
 
@@ -139,17 +160,23 @@
 
                             <th>Task</th>
 
-                            <th>Planned<br>Date</th>
+                            <th>
+                                Planned<br>
+                                Date
+                            </th>
 
-                            <th></th>
-
-                            <th></th>
+                            <th>
+                                Action
+                            </th>
 
                         </tr>
 
                     </thead>
 
+
                     <tbody id="taskTable">
+
+                        <!-- Tasks will be loaded here -->
 
                     </tbody>
 
@@ -161,6 +188,10 @@
 
     </div>
 
+
+    <!-- ========================= -->
+    <!-- JAVASCRIPT -->
+    <!-- ========================= -->
 
     <script src="app.js"></script>
 

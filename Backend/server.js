@@ -96,39 +96,6 @@ app.get("/api/users", async (req, res) => {
 // GET ALL PENDING TASKS
 // ===============================
 
-app.get("/api/tasks", async (req, res) => {
-
-    try {
-
-        const result = await pool.query(`
-            SELECT
-                t.id,
-                t.task_code,
-                u.name,
-                t.task,
-                t.planned_date,
-                t.status,
-                t.total_revisions
-            FROM tasks t
-            JOIN users u
-                ON t.user_id = u.id
-            WHERE t.status = 'Pending'
-            ORDER BY t.planned_date ASC, t.id DESC
-        `);
-
-        res.json(result.rows);
-
-    } catch (error) {
-
-        console.error(error);
-
-        res.status(500).json({
-            error: "Failed to fetch tasks"
-        });
-
-    }
-
-});
 
 
 // ===============================
@@ -401,7 +368,7 @@ app.get("/api/tasks", async (req, res) => {
                 t.planned_date,
                 t.status
             FROM tasks t
-            LEFT JOIN users u ON t.doer_id = u.id
+            LEFT JOIN users u ON t.user_id = u.id
             WHERE t.status = 'Pending'
             ORDER BY t.planned_date ASC
         `);
