@@ -1,4 +1,4 @@
-const API = "http://localhost:5000";
+const API = "https://delegation-system-1.onrender.com/";
 
 let allTasks = [];
 
