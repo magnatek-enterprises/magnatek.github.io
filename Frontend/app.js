@@ -1,206 +1,154 @@
-const API = "https://delegation-system-1.onrender.com/";
+const API = "https://delegation-system-1.onrender.com";
 
 let allTasks = [];
 
 
-// ========================================
+// =====================================================
 // PAGE LOAD
-// ========================================
+// =====================================================
 
 document.addEventListener("DOMContentLoaded", () => {
-
     loadUsers();
-
     loadTasks();
-
-    // Don't allow old dates for new tasks
-    const plannedDate =
-        document.getElementById("plannedDate");
-
-    const today =
-        new Date().toISOString().split("T")[0];
-
-    plannedDate.min = today;
-
 });
 
 
-// ========================================
+// =====================================================
 // TAB SWITCHING
-// ========================================
+// =====================================================
 
 function showSection(sectionId, button) {
 
-    document
-        .querySelectorAll(".section")
-        .forEach(section => {
-            section.style.display = "none";
-        });
+    document.querySelectorAll(".section").forEach(section => {
+        section.style.display = "none";
+    });
 
     document.getElementById(sectionId).style.display = "block";
 
-    document
-        .querySelectorAll(".tab")
-        .forEach(tab => {
-            tab.classList.remove("active");
-        });
+    document.querySelectorAll(".tab").forEach(tab => {
+        tab.classList.remove("active");
+    });
 
     button.classList.add("active");
 
-
-    // Load pending tasks
     if (sectionId === "pendingTasks") {
         loadTasks();
     }
 
-
-    // Load today's tasks
     if (sectionId === "followUp") {
         loadTodayTasks();
     }
-
 }
 
 
-// ========================================
-// LOAD DOERS
-// ========================================
+// =====================================================
+// LOAD USERS
+// =====================================================
 
 async function loadUsers() {
 
+    const select = document.getElementById("doerSelect");
+
+    if (!select) {
+        console.error("doerSelect element not found");
+        return;
+    }
+
     try {
 
-        const response =
-            await fetch(`${API}/api/doers`);
+        console.log("Loading users from:", `${API}/api/users`);
+
+        const response = await fetch(`${API}/api/users`);
 
         if (!response.ok) {
-            throw new Error("Failed to load doers");
+            throw new Error(`HTTP ${response.status}`);
         }
 
-        const users =
-            await response.json();
+        const users = await response.json();
 
-        const select =
-            document.getElementById("doerSelect");
-
-
-        // Clear existing options
+        console.log("Users received:", users);
 
         select.innerHTML = `
-            <option value="">
-                Select Doer
-            </option>
+            <option value="">Select Doer</option>
         `;
-
 
         users.forEach(user => {
 
-            const option =
-                document.createElement("option");
+            const option = document.createElement("option");
 
             option.value = user.id;
-
             option.textContent = user.name;
 
             select.appendChild(option);
 
         });
 
-
     } catch (error) {
 
-        console.error(
-            "Failed to load doers:",
-            error
-        );
+        console.error("Failed to load users:", error);
 
+        select.innerHTML = `
+            <option value="">Unable to load users</option>
+        `;
     }
-
 }
 
 
-// ========================================
+// =====================================================
 // ADD TASK
-// ========================================
+// =====================================================
 
 async function addTask() {
 
     const user_id =
-        document
-            .getElementById("doerSelect")
-            .value;
-
+        document.getElementById("doerSelect").value;
 
     const planned_date =
-        document
-            .getElementById("plannedDate")
-            .value;
-
+        document.getElementById("plannedDate").value;
 
     const task =
-        document
-            .getElementById("taskDescription")
-            .value
-            .trim();
-
+        document.getElementById("taskDescription").value.trim();
 
     const message =
-        document
-            .getElementById("addMessage");
+        document.getElementById("addMessage");
 
-
-    // Validation
 
     if (!user_id || !planned_date || !task) {
 
-        message.textContent =
-            "Please fill all fields.";
-
+        message.textContent = "Please fill all fields.";
         message.style.color = "red";
 
         return;
-
     }
 
 
     try {
 
-        const response =
-            await fetch(
-                `${API}/api/tasks`,
-                {
+        const response = await fetch(
+            `${API}/api/tasks`,
+            {
+                method: "POST",
 
-                    method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
 
-                    headers: {
-                        "Content-Type":
-                            "application/json"
-                    },
-
-                    body: JSON.stringify({
-
-                        user_id: user_id,
-
-                        task: task,
-
-                        planned_date: planned_date
-
-                    })
-
-                }
-            );
+                body: JSON.stringify({
+                    user_id,
+                    task,
+                    planned_date
+                })
+            }
+        );
 
 
-        const data =
-            await response.json();
+        const data = await response.json();
 
 
         if (!response.ok) {
 
             throw new Error(
-                data.error ||
-                data.message ||
-                "Failed to add task"
+                data.error || "Failed to add task"
             );
 
         }
@@ -212,81 +160,59 @@ async function addTask() {
         message.style.color = "green";
 
 
-        // Clear form
+        document.getElementById("doerSelect").value = "";
+        document.getElementById("plannedDate").value = "";
+        document.getElementById("taskDescription").value = "";
 
-        document
-            .getElementById("doerSelect")
-            .value = "";
-
-
-        document
-            .getElementById("plannedDate")
-            .value = "";
-
-
-        document
-            .getElementById("taskDescription")
-            .value = "";
-
-
-        // Refresh task list
 
         loadTasks();
 
 
     } catch (error) {
 
-        console.error(
-            "ADD TASK ERROR:",
-            error
-        );
+        console.error("ADD TASK ERROR:", error);
 
-        message.textContent =
-            error.message;
-
+        message.textContent = error.message;
         message.style.color = "red";
 
     }
-
 }
 
 
-// ========================================
+// =====================================================
 // LOAD ALL PENDING TASKS
-// ========================================
+// =====================================================
 
 async function loadTasks() {
 
     try {
 
+        console.log(
+            "Loading tasks from:",
+            `${API}/api/tasks`
+        );
+
         const response =
-            await fetch(
-                `${API}/api/tasks`
+            await fetch(`${API}/api/tasks`);
+
+
+        if (!response.ok) {
+
+            throw new Error(
+                `HTTP ${response.status}`
             );
+
+        }
 
 
         const data =
             await response.json();
 
 
-        if (!response.ok) {
-
-            throw new Error(
-                data.error ||
-                data.message ||
-                "Failed to fetch tasks"
-            );
-
-        }
+        console.log("Tasks received:", data);
 
 
         allTasks = data;
-
-
-        console.log(
-            "Tasks received:",
-            allTasks
-        );
 
 
         displayTasks(allTasks);
@@ -295,25 +221,42 @@ async function loadTasks() {
     } catch (error) {
 
         console.error(
-            "TASK FETCH ERROR:",
+            "Failed to fetch tasks:",
             error
         );
 
-    }
+        const table =
+            document.getElementById("taskTable");
 
+        if (table) {
+
+            table.innerHTML = `
+                <tr>
+                    <td colspan="6">
+                        Failed to fetch tasks
+                    </td>
+                </tr>
+            `;
+
+        }
+
+    }
 }
 
 
-// ========================================
+// =====================================================
 // DISPLAY TASKS
-// ========================================
+// =====================================================
 
 function displayTasks(tasks) {
 
     const table =
-        document.getElementById(
-            "taskTable"
-        );
+        document.getElementById("taskTable");
+
+
+    if (!table) {
+        return;
+    }
 
 
     table.innerHTML = "";
@@ -324,13 +267,12 @@ function displayTasks(tasks) {
         table.innerHTML = `
             <tr>
                 <td colspan="6">
-                    No pending tasks found.
+                    No pending tasks
                 </td>
             </tr>
         `;
 
         return;
-
     }
 
 
@@ -340,18 +282,13 @@ function displayTasks(tasks) {
             document.createElement("tr");
 
 
-        // Format date
-
         let date = "";
 
         if (task.planned_date) {
 
             date =
-                new Date(
-                    task.planned_date
-                ).toLocaleDateString(
-                    "en-GB"
-                );
+                new Date(task.planned_date)
+                    .toLocaleDateString("en-GB");
 
         }
 
@@ -360,20 +297,20 @@ function displayTasks(tasks) {
 
             <td>
                 <strong>
-                    ${task.id}
+                    ${escapeHTML(task.task_code || task.id)}
                 </strong>
             </td>
 
             <td>
                 ${escapeHTML(
-                    task.doer_name || ""
+                    task.name ||
+                    task.doer_name ||
+                    ""
                 )}
             </td>
 
             <td>
-                ${escapeHTML(
-                    task.task || ""
-                )}
+                ${escapeHTML(task.task || "")}
             </td>
 
             <td>
@@ -414,9 +351,9 @@ function displayTasks(tasks) {
 }
 
 
-// ========================================
+// =====================================================
 // SEARCH
-// ========================================
+// =====================================================
 
 function filterTasks() {
 
@@ -437,20 +374,23 @@ function filterTasks() {
     const filtered =
         allTasks.filter(task => {
 
-            const doerName =
+            const taskName =
                 (
-                    task.doer_name || ""
+                    task.name ||
+                    task.doer_name ||
+                    ""
                 ).toLowerCase();
 
 
             const taskDescription =
                 (
-                    task.task || ""
+                    task.task ||
+                    ""
                 ).toLowerCase();
 
 
             return (
-                doerName.includes(name) &&
+                taskName.includes(name) &&
                 taskDescription.includes(taskText)
             );
 
@@ -462,9 +402,9 @@ function filterTasks() {
 }
 
 
-// ========================================
+// =====================================================
 // MARK DONE
-// ========================================
+// =====================================================
 
 async function markDone(id) {
 
@@ -473,7 +413,6 @@ async function markDone(id) {
     )) {
 
         return;
-
     }
 
 
@@ -505,10 +444,14 @@ async function markDone(id) {
         loadTasks();
 
 
+        // Refresh today's tasks if visible
+        loadTodayTasks();
+
+
     } catch (error) {
 
         console.error(
-            "DONE ERROR:",
+            "MARK DONE ERROR:",
             error
         );
 
@@ -519,186 +462,116 @@ async function markDone(id) {
 }
 
 
-// ========================================
+// =====================================================
 // REVISE TASK
-// ========================================
+// =====================================================
 
 async function reviseTask(id) {
 
-    // Create a small popup
-    const overlay = document.createElement("div");
+    // Create a proper date picker
+    const input =
+        document.createElement("input");
 
-    overlay.style.position = "fixed";
-    overlay.style.top = "0";
-    overlay.style.left = "0";
-    overlay.style.width = "100%";
-    overlay.style.height = "100%";
-    overlay.style.background = "rgba(0,0,0,0.25)";
-    overlay.style.display = "flex";
-    overlay.style.alignItems = "center";
-    overlay.style.justifyContent = "center";
-    overlay.style.zIndex = "9999";
+    input.type = "date";
 
-    // Popup box
-    const box = document.createElement("div");
+    input.min =
+        new Date()
+            .toISOString()
+            .split("T")[0];
 
-    box.style.background = "white";
-    box.style.padding = "25px";
-    box.style.borderRadius = "10px";
-    box.style.width = "320px";
-    box.style.boxShadow = "0 4px 20px rgba(0,0,0,0.2)";
 
-    // Title
-    const title = document.createElement("h3");
+    input.style.position = "fixed";
+    input.style.left = "-9999px";
 
-    title.textContent = "Select New Due Date";
 
-    title.style.marginTop = "0";
-    title.style.marginBottom = "15px";
+    document.body.appendChild(input);
 
-    // Date input
-    const dateInput = document.createElement("input");
 
-    dateInput.type = "date";
+    input.addEventListener("change", async () => {
 
-    const today =
-        new Date().toISOString().split("T")[0];
+        const newDate = input.value;
 
-    dateInput.min = today;
+        input.remove();
 
-    dateInput.style.width = "100%";
-    dateInput.style.boxSizing = "border-box";
-    dateInput.style.padding = "12px";
-    dateInput.style.fontSize = "16px";
-    dateInput.style.border = "1px solid #ccc";
-    dateInput.style.borderRadius = "6px";
-
-    // Buttons container
-    const buttons = document.createElement("div");
-
-    buttons.style.display = "flex";
-    buttons.style.gap = "10px";
-    buttons.style.marginTop = "20px";
-
-    // Cancel button
-    const cancelButton = document.createElement("button");
-
-    cancelButton.textContent = "Cancel";
-
-    cancelButton.style.flex = "1";
-    cancelButton.style.padding = "10px";
-    cancelButton.style.cursor = "pointer";
-
-    // Confirm button
-    const confirmButton = document.createElement("button");
-
-    confirmButton.textContent = "Confirm";
-
-    confirmButton.style.flex = "1";
-    confirmButton.style.padding = "10px";
-    confirmButton.style.cursor = "pointer";
-
-    // Cancel
-    cancelButton.onclick = () => {
-
-        overlay.remove();
-
-    };
-
-    // Confirm
-    confirmButton.onclick = async () => {
-
-        const newDate = dateInput.value;
 
         if (!newDate) {
-
-            alert("Please select a new due date.");
-
             return;
-
         }
 
-        const text = prompt(
-            "Revision note (optional):"
-        );
+
+        const revisionText =
+            prompt(
+                "Revision note (optional):"
+            );
+
 
         try {
 
-            const response = await fetch(
-                `${API}/api/tasks/${id}/revise`,
-                {
-                    method: "PUT",
+            const response =
+                await fetch(
+                    `${API}/api/tasks/${id}/revise`,
+                    {
+                        method: "PUT",
 
-                    headers: {
-                        "Content-Type":
-                            "application/json"
-                    },
+                        headers: {
+                            "Content-Type":
+                                "application/json"
+                        },
 
-                    body: JSON.stringify({
-                        planned_date: newDate,
-                        revision_text: text
-                    })
-                }
-            );
+                        body: JSON.stringify({
 
-            const data = await response.json();
+                            planned_date:
+                                newDate,
+
+                            revision_text:
+                                revisionText || ""
+
+                        })
+
+                    }
+                );
+
+
+            const data =
+                await response.json();
+
 
             if (!response.ok) {
 
-                alert(
+                throw new Error(
                     data.error ||
                     "Failed to revise task"
                 );
 
-                return;
-
             }
 
-            overlay.remove();
 
             loadTasks();
+            loadTodayTasks();
+
 
         } catch (error) {
 
             console.error(
-                "Revision error:",
+                "REVISE ERROR:",
                 error
             );
 
-            alert(
-                "Failed to revise task."
-            );
+            alert(error.message);
 
         }
 
-    };
+    });
 
-    // Build popup
-    buttons.appendChild(cancelButton);
-    buttons.appendChild(confirmButton);
 
-    box.appendChild(title);
-    box.appendChild(dateInput);
-    box.appendChild(buttons);
-
-    overlay.appendChild(box);
-
-    document.body.appendChild(overlay);
-
-    // Open the calendar immediately
-    setTimeout(() => {
-
-        if (dateInput.showPicker) {
-            dateInput.showPicker();
-        }
-
-    }, 100);
+    input.click();
 
 }
 
-// ========================================
-// TODAY'S FOLLOW-UP
-// ========================================
+
+// =====================================================
+// TODAY'S TASKS
+// =====================================================
 
 async function loadTodayTasks() {
 
@@ -708,6 +581,15 @@ async function loadTodayTasks() {
             await fetch(
                 `${API}/api/tasks/today`
             );
+
+
+        if (!response.ok) {
+
+            throw new Error(
+                `HTTP ${response.status}`
+            );
+
+        }
 
 
         const tasks =
@@ -720,17 +602,12 @@ async function loadTodayTasks() {
             );
 
 
-        if (!response.ok) {
-
-            throw new Error(
-                tasks.error ||
-                "Failed to load today's tasks"
-            );
-
+        if (!container) {
+            return;
         }
 
 
-        if (tasks.length === 0) {
+        if (!tasks || tasks.length === 0) {
 
             container.innerHTML =
                 "<p>No tasks for today.</p>";
@@ -757,7 +634,9 @@ async function loadTodayTasks() {
 
                 <h3>
                     ${escapeHTML(
-                        task.doer_name || ""
+                        task.name ||
+                        task.doer_name ||
+                        ""
                     )}
                 </h3>
 
@@ -803,17 +682,19 @@ async function loadTodayTasks() {
 }
 
 
-// ========================================
+// =====================================================
 // HTML ESCAPE
-// ========================================
+// =====================================================
 
 function escapeHTML(text) {
 
     const div =
         document.createElement("div");
 
+
     div.textContent =
         text ?? "";
+
 
     return div.innerHTML;
 
