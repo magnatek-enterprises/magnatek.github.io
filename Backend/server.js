@@ -23,6 +23,56 @@ const pool = new Pool({
 
 
 // ===============================
+// SCHEMA CHECK (runs once on boot)
+//
+// Adds two nullable, additive columns that new features below need.
+// IF NOT EXISTS makes this safe to run on every restart - it never
+// touches existing columns or data, and does nothing once the
+// columns are already there.
+//
+// task_revisions.planned_date
+//   Needed so "Revision History" can show what the planned date was
+//   changed TO at each revision. Previously only the current
+//   tasks.planned_date was kept, so that history was not
+//   reconstructable. Revisions made before this deploy will show
+//   "-" for this field; every revision made after it will be
+//   captured correctly going forward.
+//
+// tasks.created_at
+//   Needed for the "Assigned Date" column in Doer History. Existing
+//   rows will initially show the date this migration ran (their
+//   real original creation date was never recorded); every task
+//   created after this deploy will have an accurate value.
+// ===============================
+
+async function ensureSchema() {
+
+    try {
+
+        await pool.query(`
+            ALTER TABLE task_revisions
+            ADD COLUMN IF NOT EXISTS planned_date DATE
+        `);
+
+        await pool.query(`
+            ALTER TABLE tasks
+            ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        `);
+
+        console.log("Schema check complete.");
+
+    } catch (error) {
+
+        console.error("Schema check failed:", error);
+
+    }
+
+}
+
+ensureSchema();
+
+
+// ===============================
 // BASIC TEST
 // ===============================
 
@@ -267,6 +317,10 @@ app.put("/api/tasks/:id/done", async (req, res) => {
 
 // ===============================
 // REVISE TASK
+//
+// UPDATED: also stores planned_date on the task_revisions row it
+// inserts, so Revision History can show what the plan changed to.
+// Nothing about the request/response shape changed.
 // ===============================
 
 app.put("/api/tasks/:id/revise", async (req, res) => {
@@ -326,13 +380,15 @@ app.put("/api/tasks/:id/revise", async (req, res) => {
                 task_id,
                 revision_number,
                 revision_date,
+                planned_date,
                 revision_text
             )
             VALUES
-            ($1, $2, CURRENT_DATE, $3)
+            ($1, $2, CURRENT_DATE, $3, $4)
         `, [
             id,
             newRevisionNumber,
+            planned_date,
             revision_text || null
         ]);
 
@@ -372,6 +428,46 @@ app.put("/api/tasks/:id/revise", async (req, res) => {
 
 
 // ===============================
+// GET REVISION HISTORY FOR A TASK
+//
+// NEW. Powers the "Revision History" modal on the Tasks page.
+// Reads only from the existing task_revisions table (plus the
+// planned_date column added by ensureSchema above).
+// ===============================
+
+app.get("/api/tasks/:id/revisions", async (req, res) => {
+
+    try {
+
+        const { id } = req.params;
+
+        const result = await pool.query(`
+            SELECT
+                revision_number,
+                revision_date,
+                planned_date,
+                revision_text
+            FROM task_revisions
+            WHERE task_id = $1
+            ORDER BY revision_number ASC
+        `, [id]);
+
+        res.json(result.rows);
+
+    } catch (error) {
+
+        console.error(error);
+
+        res.status(500).json({
+            error: "Failed to fetch revision history"
+        });
+
+    }
+
+});
+
+
+// ===============================
 // GET ALL DOERS (role = 'Doer')
 // ===============================
 
@@ -395,12 +491,6 @@ app.get("/api/doers", async (req, res) => {
 
 // ===============================
 // GET ALL PENDING TASKS
-//
-// UPDATED: now also returns task_code and total_revisions so the
-// "All Pending Tasks" table can show the task code and revision
-// count, matching what /api/tasks/today already returned.
-// This only ADDS fields to the existing response shape - nothing
-// that already worked is removed or renamed.
 // ===============================
 
 app.get("/api/tasks", async (req, res) => {
@@ -436,20 +526,18 @@ app.get("/api/tasks", async (req, res) => {
 // ===============================
 // DASHBOARD: SUMMARY COUNTS
 //
-// NEW. Powers the 5 top summary cards (Total / Completed / Pending
-// / Due Today / Overdue) on the Management Dashboard.
-//
-// Why it's needed: every existing task route only ever returns
-// PENDING tasks. There was no way to know how many tasks are
-// Completed, or the Total across all statuses, without pulling
-// every row to the browser. Doing the counting in SQL keeps this
-// fast even with thousands of tasks, and keeps PostgreSQL as the
-// single source of truth (no numbers are invented on the frontend).
+// UPDATED: accepts optional ?from=YYYY-MM-DD&to=YYYY-MM-DD to
+// filter by planned_date, used for the dashboard's date-range
+// filter. Called with no params it behaves exactly as before
+// (all-time), so nothing existing breaks.
 // ===============================
 
 app.get("/api/dashboard/summary", async (req, res) => {
 
     try {
+
+        const { from, to } = req.query;
+        const hasRange = Boolean(from && to);
 
         const result = await pool.query(`
             SELECT
@@ -465,7 +553,8 @@ app.get("/api/dashboard/summary", async (req, res) => {
                     AND planned_date < CURRENT_DATE
                 ) AS overdue
             FROM tasks
-        `);
+            ${hasRange ? "WHERE planned_date BETWEEN $1 AND $2" : ""}
+        `, hasRange ? [from, to] : []);
 
         const row = result.rows[0];
 
@@ -493,16 +582,18 @@ app.get("/api/dashboard/summary", async (req, res) => {
 // ===============================
 // DASHBOARD: DOER PERFORMANCE
 //
-// NEW. Powers the "Doer Performance" section - total assigned,
-// completed, pending and completion % for every doer, computed in
-// SQL from the real tasks/users tables (LEFT JOIN so a doer with
-// zero tasks still appears with zeros, rather than being silently
-// dropped).
+// UPDATED: accepts optional ?from=&to= the same way. The date
+// filter lives in the LEFT JOIN condition (not a WHERE clause) so
+// a doer with zero tasks in the selected range still appears with
+// zeros, instead of disappearing from the list.
 // ===============================
 
 app.get("/api/dashboard/doers", async (req, res) => {
 
     try {
+
+        const { from, to } = req.query;
+        const hasRange = Boolean(from && to);
 
         const result = await pool.query(`
             SELECT
@@ -512,10 +603,12 @@ app.get("/api/dashboard/doers", async (req, res) => {
                 COUNT(t.id) FILTER (WHERE t.status = 'Completed') AS completed,
                 COUNT(t.id) FILTER (WHERE t.status = 'Pending') AS pending
             FROM users u
-            LEFT JOIN tasks t ON t.user_id = u.id
+            LEFT JOIN tasks t
+                ON t.user_id = u.id
+                ${hasRange ? "AND t.planned_date BETWEEN $1 AND $2" : ""}
             GROUP BY u.id, u.name
             ORDER BY total_assigned DESC, u.name ASC
-        `);
+        `, hasRange ? [from, to] : []);
 
         const doers = result.rows.map(row => {
 
@@ -554,14 +647,15 @@ app.get("/api/dashboard/doers", async (req, res) => {
 // ===============================
 // DASHBOARD: REVISION STATISTICS
 //
-// NEW. Powers the revision-statistics chart. Uses only the
-// existing total_revisions column on tasks (already maintained by
-// the /revise route) - no new columns or tables required.
+// UPDATED: accepts optional ?from=&to= the same way.
 // ===============================
 
 app.get("/api/dashboard/revisions", async (req, res) => {
 
     try {
+
+        const { from, to } = req.query;
+        const hasRange = Boolean(from && to);
 
         const result = await pool.query(`
             SELECT
@@ -569,7 +663,8 @@ app.get("/api/dashboard/revisions", async (req, res) => {
                 COUNT(*) FILTER (WHERE total_revisions > 0) AS revised,
                 COALESCE(AVG(total_revisions), 0) AS avg_revisions
             FROM tasks
-        `);
+            ${hasRange ? "WHERE planned_date BETWEEN $1 AND $2" : ""}
+        `, hasRange ? [from, to] : []);
 
         const row = result.rows[0];
 
@@ -596,10 +691,10 @@ app.get("/api/dashboard/revisions", async (req, res) => {
 // DASHBOARD: TODAY'S PRIORITY
 // (due today + overdue task lists)
 //
-// NEW. /api/tasks/today already exists for the Follow Up page, but
-// there was no route that returns OVERDUE tasks specifically. This
-// single route returns both lists together so the dashboard can
-// render "Today's Priority" with one request instead of two.
+// Unchanged and intentionally NOT affected by the dashboard date
+// filter - "due today" / "overdue" are real-time operational
+// flags, not a historical reporting period, so they always reflect
+// right now regardless of which range is selected above them.
 // ===============================
 
 app.get("/api/dashboard/priority", async (req, res) => {
@@ -647,6 +742,99 @@ app.get("/api/dashboard/priority", async (req, res) => {
 
         res.status(500).json({
             error: "Failed to fetch today's priority"
+        });
+
+    }
+
+});
+
+
+// ===============================
+// DASHBOARD: SINGLE DOER - COMPLETE HISTORY
+//
+// NEW. Powers the "Doer History" modal opened by clicking a name in
+// Doer Performance. Optional ?from=&to= narrows it; called with
+// neither (the modal's default) it returns the doer's full history
+// from the beginning, as requested.
+// ===============================
+
+app.get("/api/dashboard/doers/:id/history", async (req, res) => {
+
+    try {
+
+        const { id } = req.params;
+        const { from, to } = req.query;
+        const hasRange = Boolean(from && to);
+
+        const doerResult = await pool.query(`
+            SELECT id, name FROM users WHERE id = $1
+        `, [id]);
+
+        if (doerResult.rows.length === 0) {
+
+            return res.status(404).json({
+                error: "Doer not found"
+            });
+
+        }
+
+        const summaryResult = await pool.query(`
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE status = 'Completed') AS completed,
+                COUNT(*) FILTER (WHERE status = 'Pending') AS pending,
+                COUNT(*) FILTER (WHERE total_revisions > 0) AS revised,
+                COUNT(*) FILTER (
+                    WHERE status = 'Pending'
+                    AND planned_date < CURRENT_DATE
+                ) AS overdue
+            FROM tasks
+            WHERE user_id = $1
+            ${hasRange ? "AND planned_date BETWEEN $2 AND $3" : ""}
+        `, hasRange ? [id, from, to] : [id]);
+
+        const row = summaryResult.rows[0];
+        const total = Number(row.total);
+        const completed = Number(row.completed);
+
+        const tasksResult = await pool.query(`
+            SELECT
+                id,
+                task_code,
+                task,
+                created_at,
+                planned_date,
+                status,
+                total_revisions,
+                updated_at
+            FROM tasks
+            WHERE user_id = $1
+            ${hasRange ? "AND planned_date BETWEEN $2 AND $3" : ""}
+            ORDER BY planned_date DESC
+        `, hasRange ? [id, from, to] : [id]);
+
+        res.json({
+            doer: doerResult.rows[0],
+            summary: {
+                total,
+                completed,
+                pending: Number(row.pending),
+                revised: Number(row.revised),
+                overdue: Number(row.overdue),
+                completion_percentage:
+                    total > 0
+                        ? Math.round((completed / total) * 100)
+                        : 0
+            },
+            tasks: tasksResult.rows
+        });
+
+    } catch (error) {
+
+        console.error(error);
+
+        res.status(500).json({
+            error: "Failed to fetch doer history"
         });
 
     }

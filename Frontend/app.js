@@ -3,6 +3,9 @@ const API = "https://delegation-system-1.onrender.com";
 let allTasks = [];
 let revisingTaskId = null;
 
+let dashboardRange = { from: null, to: null };
+let doerHistoryState = { id: null, name: null, from: null, to: null };
+
 
 // =====================================================
 // PAGE LOAD
@@ -23,30 +26,127 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     loadUsers();
+
+    // Dashboard defaults to the current week (Monday - Sunday, IST).
+    dashboardRange = computeRangeForKey("thisWeek");
+    updateShowingLabel("dashboardShowingLabel", dashboardRange);
     loadDashboard();
 
-    // Close modal on backdrop click or Escape.
-    const overlay = document.getElementById("reviseModal");
-    if (overlay) {
+    // Close any modal on backdrop click or Escape.
+    document.querySelectorAll(".modal-overlay").forEach(overlay => {
         overlay.addEventListener("click", (e) => {
-            if (e.target === overlay) closeReviseModal();
+            if (e.target === overlay) overlay.classList.remove("show");
         });
-    }
+    });
 
     document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") closeReviseModal();
+        if (e.key === "Escape") {
+            document.querySelectorAll(".modal-overlay.show").forEach(overlay => {
+                overlay.classList.remove("show");
+            });
+        }
     });
 });
 
 
 // =====================================================
-// HELPERS
+// DATE / TIMEZONE HELPERS (Asia/Kolkata)
 // =====================================================
 
+// Returns {y, m, d} for "today" as it currently is in Asia/Kolkata,
+// regardless of the visitor's own device timezone.
+function getISTDateParts() {
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Kolkata",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+    });
+    const parts = fmt.formatToParts(new Date());
+    const get = (type) => Number(parts.find(p => p.type === type).value);
+    return { y: get("year"), m: get("month"), d: get("day") };
+}
+
+// A UTC-midnight Date object representing today's IST calendar date.
+// From here on we only do whole-day arithmetic on it, so using UTC
+// getters/setters keeps it stable regardless of the browser's own
+// timezone.
+function istTodayAsUTCDate() {
+    const { y, m, d } = getISTDateParts();
+    return new Date(Date.UTC(y, m - 1, d));
+}
+
+function addDaysUTC(date, days) {
+    const d = new Date(date);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d;
+}
+
+function toISODateStr(date) {
+    return date.toISOString().split("T")[0];
+}
+
 function todayISO() {
-    const d = new Date();
-    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-    return d.toISOString().split("T")[0];
+    return toISODateStr(istTodayAsUTCDate());
+}
+
+// Monday of the week containing `date` (Mon-Sun weeks, never Sun-Sat).
+function mondayOfWeek(date) {
+    const day = date.getUTCDay(); // 0 = Sun, 1 = Mon, ... 6 = Sat
+    const offsetFromMonday = (day + 6) % 7;
+    return addDaysUTC(date, -offsetFromMonday);
+}
+
+function computeRangeForKey(key) {
+
+    const today = istTodayAsUTCDate();
+
+    switch (key) {
+
+        case "today":
+            return { from: toISODateStr(today), to: toISODateStr(today) };
+
+        case "thisWeek": {
+            const mon = mondayOfWeek(today);
+            const sun = addDaysUTC(mon, 6);
+            return { from: toISODateStr(mon), to: toISODateStr(sun) };
+        }
+
+        case "lastWeek": {
+            const thisMon = mondayOfWeek(today);
+            const lastMon = addDaysUTC(thisMon, -7);
+            const lastSun = addDaysUTC(lastMon, 6);
+            return { from: toISODateStr(lastMon), to: toISODateStr(lastSun) };
+        }
+
+        case "thisMonth": {
+            const first = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+            const last = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 0));
+            return { from: toISODateStr(first), to: toISODateStr(last) };
+        }
+
+        case "lastMonth": {
+            const first = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1));
+            const last = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0));
+            return { from: toISODateStr(first), to: toISODateStr(last) };
+        }
+
+        case "thisYear": {
+            const first = new Date(Date.UTC(today.getUTCFullYear(), 0, 1));
+            const last = new Date(Date.UTC(today.getUTCFullYear(), 11, 31));
+            return { from: toISODateStr(first), to: toISODateStr(last) };
+        }
+
+        case "lastYear": {
+            const first = new Date(Date.UTC(today.getUTCFullYear() - 1, 0, 1));
+            const last = new Date(Date.UTC(today.getUTCFullYear() - 1, 11, 31));
+            return { from: toISODateStr(first), to: toISODateStr(last) };
+        }
+
+        case "allTime":
+        default:
+            return { from: null, to: null };
+    }
 }
 
 function formatDate(value) {
@@ -57,6 +157,37 @@ function formatDate(value) {
         year: "numeric"
     });
 }
+
+function formatDateTime(value) {
+    if (!value) return "—";
+    return new Date(value).toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric"
+    });
+}
+
+function updateShowingLabel(elementId, range) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+
+    if (!range.from || !range.to) {
+        el.textContent = "Showing: All Time";
+        return;
+    }
+
+    el.textContent = `Showing: ${formatDate(range.from)} – ${formatDate(range.to)}`;
+}
+
+function buildRangeQuery(range) {
+    if (!range.from || !range.to) return "";
+    return `?from=${range.from}&to=${range.to}`;
+}
+
+
+// =====================================================
+// GENERAL HELPERS
+// =====================================================
 
 function escapeHTML(text) {
     const div = document.createElement("div");
@@ -318,10 +449,12 @@ function displayTasks(tasks) {
     tasks.forEach(task => {
 
         const row = document.createElement("tr");
+        const doerName = task.name || task.doer_name || "";
+        const code = task.task_code || task.id;
 
         row.innerHTML = `
-            <td class="mono">${escapeHTML(task.task_code || task.id)}</td>
-            <td>${escapeHTML(task.name || task.doer_name || "")}</td>
+            <td class="mono">${escapeHTML(code)}</td>
+            <td>${escapeHTML(doerName)}</td>
             <td>${escapeHTML(task.task || "")}</td>
             <td>${formatDate(task.planned_date)}</td>
             <td class="mono">${Number(task.total_revisions || 0)}</td>
@@ -330,6 +463,7 @@ function displayTasks(tasks) {
                 <div class="cell-actions">
                     <button class="action-btn done-btn" onclick="markDone(${task.id})">Done</button>
                     <button class="action-btn revise-btn" onclick="reviseTask(${task.id})">Revise</button>
+                    <button class="action-btn history-btn" onclick="openRevisionHistory(${task.id}, '${escapeHTML(code)}', '${escapeHTML(doerName)}')">History</button>
                 </div>
             </td>
         `;
@@ -474,6 +608,57 @@ async function submitRevise() {
 
 
 // =====================================================
+// REVISION HISTORY (modal)
+// =====================================================
+
+async function openRevisionHistory(taskId, taskCode, doerName) {
+
+    const modal = document.getElementById("revisionHistoryModal");
+    const meta = document.getElementById("revisionHistoryTaskMeta");
+    const list = document.getElementById("revisionHistoryList");
+
+    meta.textContent = doerName ? `Task #${taskCode} · ${doerName}` : `Task #${taskCode}`;
+    list.innerHTML = `<div class="state-block"><div class="state-title">Loading…</div></div>`;
+
+    modal.classList.add("show");
+
+    try {
+
+        const response = await fetch(`${API}/api/tasks/${taskId}/revisions`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const revisions = await response.json();
+
+        if (!revisions || revisions.length === 0) {
+            list.innerHTML = emptyState("No revisions yet.", "This task has not been revised.");
+            return;
+        }
+
+        list.innerHTML = revisions.map(rev => `
+            <div class="revision-item">
+                <div class="rv-top">
+                    <span class="rv-number">Revision ${rev.revision_number}</span>
+                    <span class="rv-date">${formatDate(rev.revision_date)}</span>
+                </div>
+                <div class="rv-planned">Planned Date: ${rev.planned_date ? formatDate(rev.planned_date) : "—"}</div>
+                ${rev.revision_text ? `<div class="rv-note">Note: ${escapeHTML(rev.revision_text)}</div>` : ""}
+            </div>
+        `).join("");
+
+    } catch (error) {
+
+        console.error("REVISION HISTORY ERROR:", error);
+        list.innerHTML = errorState("Couldn't load revision history", "Check your connection and try again.");
+
+    }
+}
+
+function closeRevisionHistoryModal() {
+    document.getElementById("revisionHistoryModal").classList.remove("show");
+}
+
+
+// =====================================================
 // TODAY'S TASKS (Follow Up)
 // =====================================================
 
@@ -538,6 +723,48 @@ async function loadTodayTasks() {
 
 
 // =====================================================
+// DASHBOARD DATE FILTER
+// =====================================================
+
+function onDashboardRangeChange() {
+
+    const key = document.getElementById("dashboardRangeSelect").value;
+    const customWrap = document.getElementById("dashboardCustomRange");
+
+    if (key === "custom") {
+        customWrap.classList.add("show");
+        return;
+    }
+
+    customWrap.classList.remove("show");
+
+    dashboardRange = computeRangeForKey(key);
+    updateShowingLabel("dashboardShowingLabel", dashboardRange);
+    loadDashboard();
+}
+
+function applyDashboardCustomRange() {
+
+    const from = document.getElementById("dashboardFromInput").value;
+    const to = document.getElementById("dashboardToInput").value;
+
+    if (!from || !to) {
+        showToast("Please choose both a from and a to date.", "error");
+        return;
+    }
+
+    if (from > to) {
+        showToast("The from date must be before the to date.", "error");
+        return;
+    }
+
+    dashboardRange = { from, to };
+    updateShowingLabel("dashboardShowingLabel", dashboardRange);
+    loadDashboard();
+}
+
+
+// =====================================================
 // DASHBOARD
 // =====================================================
 
@@ -546,12 +773,14 @@ async function loadDashboard() {
     const refreshBtn = document.getElementById("dashboardRefreshBtn");
     if (refreshBtn) refreshBtn.classList.add("spinning");
 
+    const rangeQuery = buildRangeQuery(dashboardRange);
+
     try {
 
         const [summaryRes, doersRes, revisionsRes, priorityRes] = await Promise.all([
-            fetch(`${API}/api/dashboard/summary`),
-            fetch(`${API}/api/dashboard/doers`),
-            fetch(`${API}/api/dashboard/revisions`),
+            fetch(`${API}/api/dashboard/summary${rangeQuery}`),
+            fetch(`${API}/api/dashboard/doers${rangeQuery}`),
+            fetch(`${API}/api/dashboard/revisions${rangeQuery}`),
             fetch(`${API}/api/dashboard/priority`)
         ]);
 
@@ -565,11 +794,11 @@ async function loadDashboard() {
         const priority = await priorityRes.json();
 
         renderSummary(summary);
-        renderDoerPerformance(doers);
         renderTasksByDoerChart(doers);
         renderStatusDonut(summary);
         renderRevisionStats(revisions);
         renderPriorityLists(priority);
+        renderDoerPerformance(doers);
 
     } catch (error) {
 
@@ -602,10 +831,10 @@ function renderDoerPerformance(doers) {
 
     list.innerHTML = doers.map(d => `
         <div class="doer-row">
-            <div class="doer-name-cell">
+            <button class="doer-name-link" onclick="openDoerHistory(${d.id}, '${escapeHTML(d.name).replace(/'/g, "\\'")}')">
                 <div class="avatar">${escapeHTML(initials(d.name))}</div>
                 <span>${escapeHTML(d.name)}</span>
-            </div>
+            </button>
             <div class="doer-stat" data-label="Assigned">${d.total_assigned}</div>
             <div class="doer-stat" data-label="Completed">${d.completed}</div>
             <div class="doer-stat" data-label="Pending">${d.pending}</div>
@@ -626,7 +855,7 @@ function renderTasksByDoerChart(doers) {
     const withTasks = (doers || []).filter(d => d.total_assigned > 0);
 
     if (withTasks.length === 0) {
-        wrap.innerHTML = emptyState("No task data yet", "Charts will appear once tasks are assigned.");
+        wrap.innerHTML = emptyState("No task data yet", "Charts will appear once tasks are assigned for this period.");
         return;
     }
 
@@ -657,7 +886,7 @@ function renderStatusDonut(summary) {
     const total = completed + pending;
 
     if (total === 0) {
-        wrap.innerHTML = emptyState("No task data yet", "The chart will appear once tasks exist.");
+        wrap.innerHTML = emptyState("No task data yet", "The chart will appear once tasks exist for this period.");
         return;
     }
 
@@ -744,4 +973,155 @@ function priorityItem(task) {
             <div class="p-date">${formatDate(task.planned_date)}</div>
         </div>
     `;
+}
+
+
+// =====================================================
+// DOER HISTORY (modal)
+// =====================================================
+
+function openDoerHistory(id, name) {
+
+    doerHistoryState = { id, name, from: null, to: null };
+
+    document.getElementById("doerHistoryName").textContent = name;
+    document.getElementById("doerHistoryRangeSelect").value = "allTime";
+    document.getElementById("doerHistoryCustomRange").classList.remove("show");
+    updateShowingLabel("doerHistoryShowing", { from: null, to: null });
+
+    document.getElementById("doerHistoryModal").classList.add("show");
+
+    loadDoerHistory();
+}
+
+function closeDoerHistoryModal() {
+    document.getElementById("doerHistoryModal").classList.remove("show");
+}
+
+function onDoerHistoryRangeChange() {
+
+    const key = document.getElementById("doerHistoryRangeSelect").value;
+    const customWrap = document.getElementById("doerHistoryCustomRange");
+
+    if (key === "custom") {
+        customWrap.classList.add("show");
+        return;
+    }
+
+    customWrap.classList.remove("show");
+
+    const range = computeRangeForKey(key);
+    doerHistoryState.from = range.from;
+    doerHistoryState.to = range.to;
+
+    updateShowingLabel("doerHistoryShowing", range);
+    loadDoerHistory();
+}
+
+function applyDoerHistoryCustomRange() {
+
+    const from = document.getElementById("doerHistoryFromInput").value;
+    const to = document.getElementById("doerHistoryToInput").value;
+
+    if (!from || !to) {
+        showToast("Please choose both a from and a to date.", "error");
+        return;
+    }
+
+    if (from > to) {
+        showToast("The from date must be before the to date.", "error");
+        return;
+    }
+
+    doerHistoryState.from = from;
+    doerHistoryState.to = to;
+
+    updateShowingLabel("doerHistoryShowing", { from, to });
+    loadDoerHistory();
+}
+
+async function loadDoerHistory() {
+
+    const summaryWrap = document.getElementById("doerHistorySummary");
+    const tableWrap = document.getElementById("doerHistoryTable");
+
+    summaryWrap.innerHTML = `<div class="state-block"><div class="state-title">Loading…</div></div>`;
+    tableWrap.innerHTML = `<tr><td colspan="7"><div class="state-block"><div class="state-title">Loading…</div></div></td></tr>`;
+
+    const rangeQuery = buildRangeQuery({ from: doerHistoryState.from, to: doerHistoryState.to });
+
+    try {
+
+        const response = await fetch(`${API}/api/dashboard/doers/${doerHistoryState.id}/history${rangeQuery}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const data = await response.json();
+
+        renderDoerHistorySummary(data.summary);
+        renderDoerHistoryTable(data.tasks);
+
+    } catch (error) {
+
+        console.error("DOER HISTORY ERROR:", error);
+        summaryWrap.innerHTML = errorState("Couldn't load this doer's history", "Check your connection and try again.");
+        tableWrap.innerHTML = "";
+
+    }
+}
+
+function renderDoerHistorySummary(summary) {
+
+    const wrap = document.getElementById("doerHistorySummary");
+
+    wrap.innerHTML = `
+        <div class="stat-card total">
+            <div class="stat-label">Total Tasks</div>
+            <div class="stat-value">${summary.total}</div>
+        </div>
+        <div class="stat-card completed">
+            <div class="stat-label">Completed</div>
+            <div class="stat-value">${summary.completed}</div>
+        </div>
+        <div class="stat-card pending">
+            <div class="stat-label">Pending</div>
+            <div class="stat-value">${summary.pending}</div>
+        </div>
+        <div class="stat-card pending">
+            <div class="stat-label">Revised</div>
+            <div class="stat-value">${summary.revised}</div>
+        </div>
+        <div class="stat-card overdue">
+            <div class="stat-label">Overdue</div>
+            <div class="stat-value">${summary.overdue}</div>
+        </div>
+        <div class="stat-card total">
+            <div class="stat-label">Completion %</div>
+            <div class="stat-value">${summary.completion_percentage}%</div>
+        </div>
+    `;
+}
+
+function renderDoerHistoryTable(tasks) {
+
+    const table = document.getElementById("doerHistoryTable");
+
+    if (!tasks || tasks.length === 0) {
+        table.innerHTML = `<tr><td colspan="7">${emptyState(
+            "No tasks in this period",
+            "Try a different date range."
+        )}</td></tr>`;
+        return;
+    }
+
+    table.innerHTML = tasks.map(task => `
+        <tr>
+            <td class="mono">${escapeHTML(task.task_code || task.id)}</td>
+            <td>${escapeHTML(task.task || "")}</td>
+            <td>${formatDateTime(task.created_at)}</td>
+            <td>${formatDate(task.planned_date)}</td>
+            <td>${statusBadge(task)}</td>
+            <td class="mono">${Number(task.total_revisions || 0)}</td>
+            <td>${formatDateTime(task.updated_at)}</td>
+        </tr>
+    `).join("");
 }

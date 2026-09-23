@@ -62,8 +62,32 @@
                 </button>
             </div>
 
+            <!-- DATE FILTER -->
+            <div class="card card-pad filter-bar section-gap">
+                <div class="filter-row">
+                    <select id="dashboardRangeSelect" onchange="onDashboardRangeChange()">
+                        <option value="today">Today</option>
+                        <option value="thisWeek" selected>This Week</option>
+                        <option value="lastWeek">Last Week</option>
+                        <option value="thisMonth">This Month</option>
+                        <option value="lastMonth">Last Month</option>
+                        <option value="thisYear">This Year</option>
+                        <option value="lastYear">Last Year</option>
+                        <option value="custom">Custom Range</option>
+                    </select>
+
+                    <div class="custom-range-inputs" id="dashboardCustomRange">
+                        <input type="date" id="dashboardFromInput">
+                        <span>to</span>
+                        <input type="date" id="dashboardToInput">
+                        <button class="ghost-btn" onclick="applyDashboardCustomRange()">Apply</button>
+                    </div>
+                </div>
+                <div class="showing-label" id="dashboardShowingLabel">Showing: —</div>
+            </div>
+
             <!-- SUMMARY CARDS -->
-            <div class="summary-grid" id="summaryGrid">
+            <div class="summary-grid section-gap" id="summaryGrid">
                 <div class="stat-card total">
                     <div class="stat-label">Total Tasks</div>
                     <div class="stat-value" id="statTotal">—</div>
@@ -111,28 +135,8 @@
 
             </div>
 
-            <!-- DOER PERFORMANCE -->
-            <div class="card card-pad section-gap">
-                <div class="card-head">
-                    <h2>Doer Performance</h2>
-                    <span class="muted">Assigned vs. completed, per doer</span>
-                </div>
-
-                <div class="doer-row head">
-                    <span>Doer</span>
-                    <span>Assigned</span>
-                    <span>Completed</span>
-                    <span>Pending</span>
-                    <span>Completion</span>
-                </div>
-
-                <div id="doerPerformanceList">
-                    <div class="state-block"><div class="state-title">Loading…</div></div>
-                </div>
-            </div>
-
             <!-- ANALYTICS -->
-            <div class="dash-grid">
+            <div class="dash-grid section-gap">
 
                 <div class="card card-pad">
                     <div class="card-head">
@@ -160,6 +164,26 @@
                     </div>
                 </div>
 
+            </div>
+
+            <!-- DOER PERFORMANCE -->
+            <div class="card card-pad">
+                <div class="card-head">
+                    <h2>Doer Performance</h2>
+                    <span class="muted">Assigned vs. completed, per doer · click a name for full history</span>
+                </div>
+
+                <div class="doer-row head">
+                    <span>Doer</span>
+                    <span>Assigned</span>
+                    <span>Completed</span>
+                    <span>Pending</span>
+                    <span>Completion</span>
+                </div>
+
+                <div id="doerPerformanceList">
+                    <div class="state-block"><div class="state-title">Loading…</div></div>
+                </div>
             </div>
 
         </section>
@@ -295,6 +319,92 @@
             <div class="modal-actions">
                 <button class="secondary-btn" onclick="closeReviseModal()">Cancel</button>
                 <button class="primary-btn" id="reviseSaveBtn" onclick="submitRevise()">Save Revision</button>
+            </div>
+
+        </div>
+    </div>
+
+
+    <!-- ========================= -->
+    <!-- REVISION HISTORY MODAL -->
+    <!-- ========================= -->
+
+    <div class="modal-overlay" id="revisionHistoryModal">
+        <div class="modal-box">
+
+            <div class="modal-header-row">
+                <div>
+                    <h3>Revision History</h3>
+                    <p class="modal-sub" id="revisionHistoryTaskMeta">—</p>
+                </div>
+                <button class="icon-close-btn" onclick="closeRevisionHistoryModal()">&times;</button>
+            </div>
+
+            <div class="revision-history-list" id="revisionHistoryList">
+                <div class="state-block"><div class="state-title">Loading…</div></div>
+            </div>
+
+        </div>
+    </div>
+
+
+    <!-- ========================= -->
+    <!-- DOER HISTORY MODAL -->
+    <!-- ========================= -->
+
+    <div class="modal-overlay" id="doerHistoryModal">
+        <div class="modal-box modal-box-lg">
+
+            <div class="modal-header-row">
+                <div>
+                    <h3 id="doerHistoryName">Doer</h3>
+                    <p class="modal-sub" id="doerHistoryShowing">Showing: All Time</p>
+                </div>
+                <button class="icon-close-btn" onclick="closeDoerHistoryModal()">&times;</button>
+            </div>
+
+            <div class="filter-row" style="margin-bottom:20px;">
+                <select id="doerHistoryRangeSelect" onchange="onDoerHistoryRangeChange()">
+                    <option value="allTime" selected>All Time</option>
+                    <option value="today">Today</option>
+                    <option value="thisWeek">This Week</option>
+                    <option value="lastWeek">Last Week</option>
+                    <option value="thisMonth">This Month</option>
+                    <option value="lastMonth">Last Month</option>
+                    <option value="thisYear">This Year</option>
+                    <option value="lastYear">Last Year</option>
+                    <option value="custom">Custom Range</option>
+                </select>
+
+                <div class="custom-range-inputs" id="doerHistoryCustomRange">
+                    <input type="date" id="doerHistoryFromInput">
+                    <span>to</span>
+                    <input type="date" id="doerHistoryToInput">
+                    <button class="ghost-btn" onclick="applyDoerHistoryCustomRange()">Apply</button>
+                </div>
+            </div>
+
+            <div class="summary-grid cols-6" id="doerHistorySummary">
+                <div class="state-block"><div class="state-title">Loading…</div></div>
+            </div>
+
+            <div class="table-wrapper" style="margin-top:20px;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Task Code</th>
+                            <th>Task</th>
+                            <th>Assigned Date</th>
+                            <th>Planned Date</th>
+                            <th>Status</th>
+                            <th>Revisions</th>
+                            <th>Last Updated</th>
+                        </tr>
+                    </thead>
+                    <tbody id="doerHistoryTable">
+                        <tr><td colspan="7"><div class="state-block"><div class="state-title">Loading…</div></div></td></tr>
+                    </tbody>
+                </table>
             </div>
 
         </div>
