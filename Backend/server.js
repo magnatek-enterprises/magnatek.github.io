@@ -93,12 +93,6 @@ app.get("/api/users", async (req, res) => {
 
 
 // ===============================
-// GET ALL PENDING TASKS
-// ===============================
-
-
-
-// ===============================
 // GET TODAY'S TASKS
 // ===============================
 
@@ -157,6 +151,22 @@ app.post("/api/tasks", async (req, res) => {
 
             return res.status(400).json({
                 error: "Doer, task and planned date are required"
+            });
+
+        }
+
+
+        // Reject past dates server-side too, so the restriction
+        // can't be bypassed by calling the API directly.
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const chosenDate = new Date(planned_date + "T00:00:00");
+
+        if (chosenDate < today) {
+
+            return res.status(400).json({
+                error: "Planned date cannot be in the past"
             });
 
         }
@@ -271,6 +281,25 @@ app.put("/api/tasks/:id/revise", async (req, res) => {
         } = req.body;
 
 
+        // Reject past dates server-side too.
+        if (planned_date) {
+
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+
+            const chosenDate = new Date(planned_date + "T00:00:00");
+
+            if (chosenDate < today) {
+
+                return res.status(400).json({
+                    error: "Planned date cannot be in the past"
+                });
+
+            }
+
+        }
+
+
         const taskResult = await pool.query(`
             SELECT total_revisions
             FROM tasks
@@ -340,7 +369,12 @@ app.put("/api/tasks/:id/revise", async (req, res) => {
     }
 
 });
-// Get all doers
+
+
+// ===============================
+// GET ALL DOERS (role = 'Doer')
+// ===============================
+
 app.get("/api/doers", async (req, res) => {
     try {
         const result = await pool.query(
@@ -357,16 +391,29 @@ app.get("/api/doers", async (req, res) => {
         });
     }
 });
-// Get all pending tasks
+
+
+// ===============================
+// GET ALL PENDING TASKS
+//
+// UPDATED: now also returns task_code and total_revisions so the
+// "All Pending Tasks" table can show the task code and revision
+// count, matching what /api/tasks/today already returned.
+// This only ADDS fields to the existing response shape - nothing
+// that already worked is removed or renamed.
+// ===============================
+
 app.get("/api/tasks", async (req, res) => {
     try {
         const result = await pool.query(`
             SELECT 
                 t.id,
+                t.task_code,
                 u.name AS doer_name,
                 t.task,
                 t.planned_date,
-                t.status
+                t.status,
+                t.total_revisions
             FROM tasks t
             LEFT JOIN users u ON t.user_id = u.id
             WHERE t.status = 'Pending'
@@ -384,6 +431,228 @@ app.get("/api/tasks", async (req, res) => {
         });
     }
 });
+
+
+// ===============================
+// DASHBOARD: SUMMARY COUNTS
+//
+// NEW. Powers the 5 top summary cards (Total / Completed / Pending
+// / Due Today / Overdue) on the Management Dashboard.
+//
+// Why it's needed: every existing task route only ever returns
+// PENDING tasks. There was no way to know how many tasks are
+// Completed, or the Total across all statuses, without pulling
+// every row to the browser. Doing the counting in SQL keeps this
+// fast even with thousands of tasks, and keeps PostgreSQL as the
+// single source of truth (no numbers are invented on the frontend).
+// ===============================
+
+app.get("/api/dashboard/summary", async (req, res) => {
+
+    try {
+
+        const result = await pool.query(`
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE status = 'Completed') AS completed,
+                COUNT(*) FILTER (WHERE status = 'Pending') AS pending,
+                COUNT(*) FILTER (
+                    WHERE status = 'Pending'
+                    AND planned_date = CURRENT_DATE
+                ) AS due_today,
+                COUNT(*) FILTER (
+                    WHERE status = 'Pending'
+                    AND planned_date < CURRENT_DATE
+                ) AS overdue
+            FROM tasks
+        `);
+
+        const row = result.rows[0];
+
+        res.json({
+            total: Number(row.total),
+            completed: Number(row.completed),
+            pending: Number(row.pending),
+            due_today: Number(row.due_today),
+            overdue: Number(row.overdue)
+        });
+
+    } catch (error) {
+
+        console.error(error);
+
+        res.status(500).json({
+            error: "Failed to fetch dashboard summary"
+        });
+
+    }
+
+});
+
+
+// ===============================
+// DASHBOARD: DOER PERFORMANCE
+//
+// NEW. Powers the "Doer Performance" section - total assigned,
+// completed, pending and completion % for every doer, computed in
+// SQL from the real tasks/users tables (LEFT JOIN so a doer with
+// zero tasks still appears with zeros, rather than being silently
+// dropped).
+// ===============================
+
+app.get("/api/dashboard/doers", async (req, res) => {
+
+    try {
+
+        const result = await pool.query(`
+            SELECT
+                u.id,
+                u.name,
+                COUNT(t.id) AS total_assigned,
+                COUNT(t.id) FILTER (WHERE t.status = 'Completed') AS completed,
+                COUNT(t.id) FILTER (WHERE t.status = 'Pending') AS pending
+            FROM users u
+            LEFT JOIN tasks t ON t.user_id = u.id
+            GROUP BY u.id, u.name
+            ORDER BY total_assigned DESC, u.name ASC
+        `);
+
+        const doers = result.rows.map(row => {
+
+            const total = Number(row.total_assigned);
+            const completed = Number(row.completed);
+
+            return {
+                id: row.id,
+                name: row.name,
+                total_assigned: total,
+                completed,
+                pending: Number(row.pending),
+                completion_percentage:
+                    total > 0
+                        ? Math.round((completed / total) * 100)
+                        : 0
+            };
+
+        });
+
+        res.json(doers);
+
+    } catch (error) {
+
+        console.error(error);
+
+        res.status(500).json({
+            error: "Failed to fetch doer performance"
+        });
+
+    }
+
+});
+
+
+// ===============================
+// DASHBOARD: REVISION STATISTICS
+//
+// NEW. Powers the revision-statistics chart. Uses only the
+// existing total_revisions column on tasks (already maintained by
+// the /revise route) - no new columns or tables required.
+// ===============================
+
+app.get("/api/dashboard/revisions", async (req, res) => {
+
+    try {
+
+        const result = await pool.query(`
+            SELECT
+                COUNT(*) FILTER (WHERE total_revisions = 0) AS never_revised,
+                COUNT(*) FILTER (WHERE total_revisions > 0) AS revised,
+                COALESCE(AVG(total_revisions), 0) AS avg_revisions
+            FROM tasks
+        `);
+
+        const row = result.rows[0];
+
+        res.json({
+            never_revised: Number(row.never_revised),
+            revised: Number(row.revised),
+            avg_revisions: Number(parseFloat(row.avg_revisions).toFixed(2))
+        });
+
+    } catch (error) {
+
+        console.error(error);
+
+        res.status(500).json({
+            error: "Failed to fetch revision statistics"
+        });
+
+    }
+
+});
+
+
+// ===============================
+// DASHBOARD: TODAY'S PRIORITY
+// (due today + overdue task lists)
+//
+// NEW. /api/tasks/today already exists for the Follow Up page, but
+// there was no route that returns OVERDUE tasks specifically. This
+// single route returns both lists together so the dashboard can
+// render "Today's Priority" with one request instead of two.
+// ===============================
+
+app.get("/api/dashboard/priority", async (req, res) => {
+
+    try {
+
+        const dueToday = await pool.query(`
+            SELECT
+                t.id,
+                t.task_code,
+                u.name AS doer_name,
+                t.task,
+                t.planned_date,
+                t.total_revisions
+            FROM tasks t
+            LEFT JOIN users u ON t.user_id = u.id
+            WHERE t.status = 'Pending'
+              AND t.planned_date = CURRENT_DATE
+            ORDER BY t.id DESC
+        `);
+
+        const overdue = await pool.query(`
+            SELECT
+                t.id,
+                t.task_code,
+                u.name AS doer_name,
+                t.task,
+                t.planned_date,
+                t.total_revisions
+            FROM tasks t
+            LEFT JOIN users u ON t.user_id = u.id
+            WHERE t.status = 'Pending'
+              AND t.planned_date < CURRENT_DATE
+            ORDER BY t.planned_date ASC
+        `);
+
+        res.json({
+            due_today: dueToday.rows,
+            overdue: overdue.rows
+        });
+
+    } catch (error) {
+
+        console.error(error);
+
+        res.status(500).json({
+            error: "Failed to fetch today's priority"
+        });
+
+    }
+
+});
+
 
 // ===============================
 // START SERVER
