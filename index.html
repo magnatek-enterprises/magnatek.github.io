@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Delegation System · Magnatek</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <!-- ========================= -->
+    <!-- HEADER -->
+    <!-- ========================= -->
+
+    <header class="app-header">
+        <div class="header-inner">
+
+            <div class="brand">
+                <img src="assets/logo.png" alt="Magnatek" class="brand-logo">
+                <div class="brand-divider"></div>
+                <div class="brand-text">
+                    <span class="brand-name">Delegation System</span>
+                    <span class="brand-sub">Task &amp; performance tracking</span>
+                </div>
+            </div>
+
+            <nav class="main-nav">
+                <button class="nav-link active" data-view="dashboard" onclick="showView('dashboard', this)">Dashboard</button>
+                <button class="nav-link" data-view="tasks" onclick="showView('tasks', this)">Tasks</button>
+                <button class="nav-link" data-view="addTask" onclick="showView('addTask', this)">Add Task</button>
+                <button class="nav-link" data-view="followUp" onclick="showView('followUp', this)">Follow Up</button>
+            </nav>
+
+        </div>
+    </header>
+
+
+    <!-- ========================= -->
+    <!-- MAIN -->
+    <!-- ========================= -->
+
+    <main class="app-main">
+
+        <!-- ========================= -->
+        <!-- DASHBOARD -->
+        <!-- ========================= -->
+
+        <section id="dashboard" class="view active">
+
+            <div class="page-head">
+                <div>
+                    <h1>Management Dashboard</h1>
+                    <p>Live overview of delegated work, pulled directly from the database.</p>
+                </div>
+                <button class="ghost-btn" id="dashboardRefreshBtn" onclick="loadDashboard()">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                    Refresh
+                </button>
+            </div>
+
+            <!-- DATE FILTER -->
+            <div class="card card-pad filter-bar section-gap">
+                <div class="filter-row">
+                    <select id="dashboardRangeSelect" onchange="onDashboardRangeChange()">
+                        <option value="today">Today</option>
+                        <option value="thisWeek" selected>This Week</option>
+                        <option value="lastWeek">Last Week</option>
+                        <option value="thisMonth">This Month</option>
+                        <option value="lastMonth">Last Month</option>
+                        <option value="thisYear">This Year</option>
+                        <option value="lastYear">Last Year</option>
+                        <option value="custom">Custom Range</option>
+                    </select>
+
+                    <div class="custom-range-inputs" id="dashboardCustomRange">
+                        <input type="date" id="dashboardFromInput">
+                        <span>to</span>
+                        <input type="date" id="dashboardToInput">
+                        <button class="ghost-btn" onclick="applyDashboardCustomRange()">Apply</button>
+                    </div>
+                </div>
+                <div class="showing-label" id="dashboardShowingLabel">Showing: —</div>
+            </div>
+
+            <!-- SUMMARY CARDS -->
+            <div class="summary-grid section-gap" id="summaryGrid">
+                <div class="stat-card total">
+                    <div class="stat-label">Total Tasks</div>
+                    <div class="stat-value" id="statTotal">—</div>
+                </div>
+                <div class="stat-card completed">
+                    <div class="stat-label">Completed</div>
+                    <div class="stat-value" id="statCompleted">—</div>
+                </div>
+                <div class="stat-card pending">
+                    <div class="stat-label">Pending</div>
+                    <div class="stat-value" id="statPending">—</div>
+                </div>
+                <div class="stat-card due-today">
+                    <div class="stat-label">Due Today</div>
+                    <div class="stat-value" id="statDueToday">—</div>
+                </div>
+                <div class="stat-card overdue">
+                    <div class="stat-label">Overdue</div>
+                    <div class="stat-value" id="statOverdue">—</div>
+                </div>
+            </div>
+
+            <!-- TODAY'S PRIORITY -->
+            <div class="dash-grid priority section-gap">
+
+                <div class="card card-pad">
+                    <div class="card-head">
+                        <h2>Due Today</h2>
+                        <span class="muted" id="dueTodayCount"></span>
+                    </div>
+                    <div class="priority-list" id="dueTodayList">
+                        <div class="state-block"><div class="state-title">Loading…</div></div>
+                    </div>
+                </div>
+
+                <div class="card card-pad">
+                    <div class="card-head">
+                        <h2>Overdue</h2>
+                        <span class="muted" id="overdueCount"></span>
+                    </div>
+                    <div class="priority-list" id="overdueList">
+                        <div class="state-block"><div class="state-title">Loading…</div></div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- ANALYTICS -->
+            <div class="dash-grid section-gap">
+
+                <div class="card card-pad">
+                    <div class="card-head">
+                        <h2>Tasks by Doer</h2>
+                        <span class="muted">Completed vs. pending</span>
+                    </div>
+                    <div class="bar-chart" id="tasksByDoerChart">
+                        <div class="state-block"><div class="state-title">Loading…</div></div>
+                    </div>
+                </div>
+
+                <div class="card card-pad">
+                    <div class="card-head">
+                        <h2>Completed vs Pending</h2>
+                    </div>
+                    <div class="chart-row" id="statusDonutWrap">
+                        <div class="state-block"><div class="state-title">Loading…</div></div>
+                    </div>
+
+                    <div class="card-head" style="margin-top:24px;">
+                        <h2>Revisions</h2>
+                    </div>
+                    <div class="revision-stat-row" id="revisionStats">
+                        <div class="state-block"><div class="state-title">Loading…</div></div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- DOER PERFORMANCE -->
+            <div class="card card-pad">
+                <div class="card-head">
+                    <h2>Doer Performance</h2>
+                    <span class="muted">Assigned vs. completed, per doer · click a name for full history</span>
+                </div>
+
+                <div class="doer-row head">
+                    <span>Doer</span>
+                    <span>Assigned</span>
+                    <span>Completed</span>
+                    <span>Pending</span>
+                    <span>Completion</span>
+                </div>
+
+                <div id="doerPerformanceList">
+                    <div class="state-block"><div class="state-title">Loading…</div></div>
+                </div>
+            </div>
+
+        </section>
+
+
+        <!-- ========================= -->
+        <!-- ADD NEW TASK -->
+        <!-- ========================= -->
+
+        <section id="addTask" class="view">
+
+            <div class="page-head">
+                <div>
+                    <h1>Add New Task</h1>
+                    <p>Assign a task to a doer with a planned completion date.</p>
+                </div>
+            </div>
+
+            <div class="card card-pad form-card">
+
+                <div class="form-row">
+
+                    <div class="field" style="margin-bottom:0;">
+                        <label for="doerSelect">Select Doer</label>
+                        <select id="doerSelect">
+                            <option value="">Select Doer</option>
+                        </select>
+                    </div>
+
+                    <div class="field" style="margin-bottom:0;">
+                        <label for="plannedDate">Planned Date</label>
+                        <input type="date" id="plannedDate">
+                    </div>
+
+                </div>
+
+                <div class="field">
+                    <label for="taskDescription">Task Description</label>
+                    <textarea id="taskDescription" placeholder="Describe the task in detail"></textarea>
+                </div>
+
+                <button class="primary-btn full" id="addTaskBtn" onclick="addTask()">Add Task</button>
+
+                <div id="addMessage" class="form-message"></div>
+
+            </div>
+
+        </section>
+
+
+        <!-- ========================= -->
+        <!-- FOLLOW UP -->
+        <!-- ========================= -->
+
+        <section id="followUp" class="view">
+
+            <div class="page-head">
+                <div>
+                    <h1>Today's Follow Up</h1>
+                    <p>Tasks planned for today across all doers.</p>
+                </div>
+            </div>
+
+            <div id="todayTasks" class="task-grid">
+                <div class="state-block"><div class="state-title">Loading…</div></div>
+            </div>
+
+        </section>
+
+
+        <!-- ========================= -->
+        <!-- ALL PENDING TASKS -->
+        <!-- ========================= -->
+
+        <section id="tasks" class="view">
+
+            <div class="page-head">
+                <div>
+                    <h1>Tasks</h1>
+                    <p>All pending tasks across the team.</p>
+                </div>
+            </div>
+
+            <div class="search-bar">
+                <input type="text" id="searchName" placeholder="Search by doer name…" onkeyup="filterTasks()">
+                <input type="text" id="searchTask" placeholder="Search by task…" onkeyup="filterTasks()">
+            </div>
+
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Task Code</th>
+                            <th>Doer</th>
+                            <th>Task</th>
+                            <th>Planned Date</th>
+                            <th>Revisions</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="taskTable">
+                        <tr><td colspan="7"><div class="state-block"><div class="state-title">Loading…</div></div></td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+        </section>
+
+    </main>
+
+
+    <!-- ========================= -->
+    <!-- REVISE MODAL -->
+    <!-- ========================= -->
+
+    <div class="modal-overlay" id="reviseModal">
+        <div class="modal-box">
+
+            <h3>Revise Task</h3>
+            <p class="modal-sub">Choose a new planned date. Past dates are disabled.</p>
+
+            <div class="field">
+                <label for="reviseDateInput">New Planned Date</label>
+                <input type="date" id="reviseDateInput">
+            </div>
+
+            <div class="field" style="margin-bottom:0;">
+                <label for="reviseNoteInput">Revision Note (optional)</label>
+                <textarea id="reviseNoteInput" placeholder="Reason for the change…" style="min-height:70px;"></textarea>
+            </div>
+
+            <div class="modal-actions">
+                <button class="secondary-btn" onclick="closeReviseModal()">Cancel</button>
+                <button class="primary-btn" id="reviseSaveBtn" onclick="submitRevise()">Save Revision</button>
+            </div>
+
+        </div>
+    </div>
+
+
+    <!-- ========================= -->
+    <!-- REVISION HISTORY MODAL -->
+    <!-- ========================= -->
+
+    <div class="modal-overlay" id="revisionHistoryModal">
+        <div class="modal-box">
+
+            <div class="modal-header-row">
+                <div>
+                    <h3>Revision History</h3>
+                    <p class="modal-sub" id="revisionHistoryTaskMeta">—</p>
+                </div>
+                <button class="icon-close-btn" onclick="closeRevisionHistoryModal()">&times;</button>
+            </div>
+
+            <div class="revision-history-list" id="revisionHistoryList">
+                <div class="state-block"><div class="state-title">Loading…</div></div>
+            </div>
+
+        </div>
+    </div>
+
+
+    <!-- ========================= -->
+    <!-- DOER HISTORY MODAL -->
+    <!-- ========================= -->
+
+    <div class="modal-overlay" id="doerHistoryModal">
+        <div class="modal-box modal-box-lg">
+
+            <div class="modal-header-row">
+                <div>
+                    <h3 id="doerHistoryName">Doer</h3>
+                    <p class="modal-sub" id="doerHistoryShowing">Showing: All Time</p>
+                </div>
+                <button class="icon-close-btn" onclick="closeDoerHistoryModal()">&times;</button>
+            </div>
+
+            <div class="filter-row" style="margin-bottom:20px;">
+                <select id="doerHistoryRangeSelect" onchange="onDoerHistoryRangeChange()">
+                    <option value="allTime" selected>All Time</option>
+                    <option value="today">Today</option>
+                    <option value="thisWeek">This Week</option>
+                    <option value="lastWeek">Last Week</option>
+                    <option value="thisMonth">This Month</option>
+                    <option value="lastMonth">Last Month</option>
+                    <option value="thisYear">This Year</option>
+                    <option value="lastYear">Last Year</option>
+                    <option value="custom">Custom Range</option>
+                </select>
+
+                <div class="custom-range-inputs" id="doerHistoryCustomRange">
+                    <input type="date" id="doerHistoryFromInput">
+                    <span>to</span>
+                    <input type="date" id="doerHistoryToInput">
+                    <button class="ghost-btn" onclick="applyDoerHistoryCustomRange()">Apply</button>
+                </div>
+            </div>
+
+            <div class="summary-grid cols-6" id="doerHistorySummary">
+                <div class="state-block"><div class="state-title">Loading…</div></div>
+            </div>
+
+            <div class="table-wrapper" style="margin-top:20px;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Task Code</th>
+                            <th>Task</th>
+                            <th>Assigned Date</th>
+                            <th>Planned Date</th>
+                            <th>Status</th>
+                            <th>Revisions</th>
+                            <th>Last Updated</th>
+                        </tr>
+                    </thead>
+                    <tbody id="doerHistoryTable">
+                        <tr><td colspan="7"><div class="state-block"><div class="state-title">Loading…</div></div></td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+        </div>
+    </div>
+
+
+    <!-- ========================= -->
+    <!-- TOASTS -->
+    <!-- ========================= -->
+
+    <div class="toast-stack" id="toastStack"></div>
+
+
+    <!-- ========================= -->
+    <!-- JAVASCRIPT -->
+    <!-- ========================= -->
+
+    <script src="app.js"></script>
+
+</body>
+
+</html>
