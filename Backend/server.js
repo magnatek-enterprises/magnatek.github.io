@@ -25,24 +25,22 @@ const pool = new Pool({
 // ===============================
 // SCHEMA CHECK (runs once on boot)
 //
-// Adds two nullable, additive columns that new features below need.
+// Adds nullable, additive columns that features below need.
 // IF NOT EXISTS makes this safe to run on every restart - it never
 // touches existing columns or data, and does nothing once the
 // columns are already there.
 //
+// NOTE: tasks.actual_date and tasks.priority were already added
+// manually (per project instructions) - they are intentionally NOT
+// repeated here to avoid a redundant migration. This block only
+// keeps the two additive columns from the previous deploy.
+//
 // task_revisions.planned_date
 //   Needed so "Revision History" can show what the planned date was
-//   changed TO at each revision. Previously only the current
-//   tasks.planned_date was kept, so that history was not
-//   reconstructable. Revisions made before this deploy will show
-//   "-" for this field; every revision made after it will be
-//   captured correctly going forward.
+//   changed TO at each revision.
 //
 // tasks.created_at
-//   Needed for the "Assigned Date" column in Doer History. Existing
-//   rows will initially show the date this migration ran (their
-//   real original creation date was never recorded); every task
-//   created after this deploy will have an accurate value.
+//   Needed for the "Assigned Date" column in Doer History.
 // ===============================
 
 async function ensureSchema() {
@@ -70,6 +68,53 @@ async function ensureSchema() {
 }
 
 ensureSchema();
+
+
+// ===============================
+// HELPERS
+// ===============================
+
+const ALLOWED_PRIORITIES = ["High", "Medium", "Low"];
+
+// Detects a leading date such as "21-09-2026" or "08/10/2026" at the
+// very start of a task description and returns it as YYYY-MM-DD, or
+// null if no recognizable leading date is present. The original task
+// text is never modified by this - it is only used to derive
+// actual_date on NEW inserts.
+function extractLeadingDate(text) {
+
+    if (!text || typeof text !== "string") return null;
+
+    const match = text.trim().match(/^(\d{1,2})[\-\/](\d{1,2})[\-\/](\d{4})/);
+
+    if (!match) return null;
+
+    const day = parseInt(match[1], 10);
+    const month = parseInt(match[2], 10);
+    const year = parseInt(match[3], 10);
+
+    if (month < 1 || month > 12) return null;
+    if (day < 1 || day > 31) return null;
+    if (year < 1000 || year > 9999) return null;
+
+    const mm = String(month).padStart(2, "0");
+    const dd = String(day).padStart(2, "0");
+
+    return `${year}-${mm}-${dd}`;
+}
+
+function normalizePriority(value) {
+    return ALLOWED_PRIORITIES.includes(value) ? value : "Medium";
+}
+
+const TASK_PRIORITY_ORDER_SQL = `
+    CASE t.priority
+        WHEN 'High' THEN 1
+        WHEN 'Medium' THEN 2
+        WHEN 'Low' THEN 3
+        ELSE 4
+    END
+`;
 
 
 // ===============================
@@ -115,6 +160,10 @@ app.get("/api/test-db", async (req, res) => {
 
 // ===============================
 // GET ALL USERS / DOERS
+//
+// UPDATED: now also returns phone, needed by the Daily Pending
+// Tasks WhatsApp feature. This was already selected before, just
+// not documented - no shape change for existing callers.
 // ===============================
 
 app.get("/api/users", async (req, res) => {
@@ -143,6 +192,28 @@ app.get("/api/users", async (req, res) => {
 
 
 // ===============================
+// GET ALL DOERS (role = 'Doer')
+// ===============================
+
+app.get("/api/doers", async (req, res) => {
+    try {
+        const result = await pool.query(
+            "SELECT id, name, phone FROM users WHERE role = 'Doer' ORDER BY name"
+        );
+
+        res.json(result.rows);
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            success: false,
+            message: "Failed to fetch doers"
+        });
+    }
+});
+
+
+// ===============================
 // GET TODAY'S TASKS
 // ===============================
 
@@ -157,6 +228,8 @@ app.get("/api/tasks/today", async (req, res) => {
                 u.name,
                 t.task,
                 t.planned_date,
+                t.actual_date,
+                t.priority,
                 t.status,
                 t.total_revisions
             FROM tasks t
@@ -164,7 +237,7 @@ app.get("/api/tasks/today", async (req, res) => {
                 ON t.user_id = u.id
             WHERE t.status = 'Pending'
               AND t.planned_date = CURRENT_DATE
-            ORDER BY t.id DESC
+            ORDER BY ${TASK_PRIORITY_ORDER_SQL}, t.id DESC
         `);
 
         res.json(result.rows);
@@ -184,6 +257,13 @@ app.get("/api/tasks/today", async (req, res) => {
 
 // ===============================
 // ADD NEW TASK
+//
+// UPDATED: accepts an optional "priority" (High/Medium/Low, default
+// Medium) and automatically derives actual_date from a leading date
+// in the task text. The task text itself is stored exactly as
+// given - only used to *read* a date from, never modified. This
+// only ever affects brand-new inserts; nothing here touches
+// existing rows.
 // ===============================
 
 app.post("/api/tasks", async (req, res) => {
@@ -193,7 +273,8 @@ app.post("/api/tasks", async (req, res) => {
         const {
             user_id,
             task,
-            planned_date
+            planned_date,
+            priority
         } = req.body;
 
 
@@ -226,6 +307,9 @@ app.post("/api/tasks", async (req, res) => {
         const task_code =
             Math.random().toString(36).substring(2, 9);
 
+        const finalPriority = normalizePriority(priority);
+        const actual_date = extractLeadingDate(task);
+
 
         const result = await pool.query(`
             INSERT INTO tasks
@@ -234,16 +318,20 @@ app.post("/api/tasks", async (req, res) => {
                 user_id,
                 task,
                 planned_date,
-                status
+                status,
+                priority,
+                actual_date
             )
             VALUES
-            ($1, $2, $3, $4, 'Pending')
+            ($1, $2, $3, $4, 'Pending', $5, $6)
             RETURNING *
         `, [
             task_code,
             user_id,
             task,
-            planned_date
+            planned_date,
+            finalPriority,
+            actual_date
         ]);
 
 
@@ -318,9 +406,9 @@ app.put("/api/tasks/:id/done", async (req, res) => {
 // ===============================
 // REVISE TASK
 //
-// UPDATED: also stores planned_date on the task_revisions row it
-// inserts, so Revision History can show what the plan changed to.
-// Nothing about the request/response shape changed.
+// Also stores planned_date on the task_revisions row it inserts, so
+// Revision History can show what the plan changed to. Nothing about
+// the request/response shape changed.
 // ===============================
 
 app.put("/api/tasks/:id/revise", async (req, res) => {
@@ -429,10 +517,6 @@ app.put("/api/tasks/:id/revise", async (req, res) => {
 
 // ===============================
 // GET REVISION HISTORY FOR A TASK
-//
-// NEW. Powers the "Revision History" modal on the Tasks page.
-// Reads only from the existing task_revisions table (plus the
-// planned_date column added by ensureSchema above).
 // ===============================
 
 app.get("/api/tasks/:id/revisions", async (req, res) => {
@@ -468,47 +552,97 @@ app.get("/api/tasks/:id/revisions", async (req, res) => {
 
 
 // ===============================
-// GET ALL DOERS (role = 'Doer')
-// ===============================
-
-app.get("/api/doers", async (req, res) => {
-    try {
-        const result = await pool.query(
-            "SELECT id, name, phone FROM users WHERE role = 'Doer' ORDER BY name"
-        );
-
-        res.json(result.rows);
-    } catch (error) {
-        console.error(error);
-
-        res.status(500).json({
-            success: false,
-            message: "Failed to fetch doers"
-        });
-    }
-});
-
-
-// ===============================
-// GET ALL PENDING TASKS
+// GET TASKS (general purpose, filterable)
+//
+// UPDATED - this now backs the Tasks view, the Daily Pending Tasks
+// view, and the clickable dashboard cards. It stays backward
+// compatible: called with no "status" param it still defaults to
+// Pending only, exactly like before, so any old cached frontend
+// still works.
+//
+// Supported query params (all optional):
+//   status     "Pending" | "Completed" | "Week Shifted" | "All"
+//   doer_id    filter by user_id (also accepts "user_id")
+//   priority   "High" | "Medium" | "Low" | "All"
+//   from, to   filter by planned_date range (YYYY-MM-DD)
+//   due        "today" | "overdue" (only meaningful for Pending tasks)
+//
+// Sort order: High -> Medium -> Low -> (NULL priority, historical
+// tasks) last, then by planned_date. This never re-labels historical
+// NULL-priority rows as any priority - they just sort after the
+// prioritized ones.
 // ===============================
 
 app.get("/api/tasks", async (req, res) => {
     try {
+
+        const {
+            status,
+            doer_id,
+            user_id,
+            priority,
+            from,
+            to,
+            due
+        } = req.query;
+
+        const doerId = doer_id || user_id;
+
+        // Preserve old default behaviour (Pending-only) when the
+        // caller doesn't specify a status at all.
+        const statusFilter = status || "Pending";
+
+        const conditions = [];
+        const params = [];
+
+        if (statusFilter && statusFilter !== "All") {
+            params.push(statusFilter);
+            conditions.push(`t.status = $${params.length}`);
+        }
+
+        if (doerId) {
+            params.push(doerId);
+            conditions.push(`t.user_id = $${params.length}`);
+        }
+
+        if (priority && priority !== "All") {
+            params.push(priority);
+            conditions.push(`t.priority = $${params.length}`);
+        }
+
+        if (from && to) {
+            params.push(from);
+            params.push(to);
+            conditions.push(`t.planned_date BETWEEN $${params.length - 1} AND $${params.length}`);
+        }
+
+        if (due === "today") {
+            conditions.push(`t.planned_date = CURRENT_DATE`);
+        } else if (due === "overdue") {
+            conditions.push(`t.planned_date < CURRENT_DATE`);
+        }
+
+        const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
         const result = await pool.query(`
-            SELECT 
+            SELECT
                 t.id,
                 t.task_code,
                 u.name AS doer_name,
+                u.phone AS doer_phone,
                 t.task,
                 t.planned_date,
+                t.actual_date,
+                t.priority,
                 t.status,
-                t.total_revisions
+                t.total_revisions,
+                t.created_at,
+                t.updated_at
             FROM tasks t
             LEFT JOIN users u ON t.user_id = u.id
-            WHERE t.status = 'Pending'
-            ORDER BY t.planned_date ASC
-        `);
+            ${whereClause}
+            ORDER BY ${TASK_PRIORITY_ORDER_SQL}, t.planned_date ASC
+        `, params);
 
         res.json(result.rows);
 
@@ -526,10 +660,9 @@ app.get("/api/tasks", async (req, res) => {
 // ===============================
 // DASHBOARD: SUMMARY COUNTS
 //
-// UPDATED: accepts optional ?from=YYYY-MM-DD&to=YYYY-MM-DD to
-// filter by planned_date, used for the dashboard's date-range
-// filter. Called with no params it behaves exactly as before
-// (all-time), so nothing existing breaks.
+// UPDATED: also returns week_shifted as its own count, separate
+// from completed/pending, per the Week Shifted requirement. Accepts
+// optional ?from=&to= exactly as before.
 // ===============================
 
 app.get("/api/dashboard/summary", async (req, res) => {
@@ -544,6 +677,7 @@ app.get("/api/dashboard/summary", async (req, res) => {
                 COUNT(*) AS total,
                 COUNT(*) FILTER (WHERE status = 'Completed') AS completed,
                 COUNT(*) FILTER (WHERE status = 'Pending') AS pending,
+                COUNT(*) FILTER (WHERE status = 'Week Shifted') AS week_shifted,
                 COUNT(*) FILTER (
                     WHERE status = 'Pending'
                     AND planned_date = CURRENT_DATE
@@ -562,6 +696,7 @@ app.get("/api/dashboard/summary", async (req, res) => {
             total: Number(row.total),
             completed: Number(row.completed),
             pending: Number(row.pending),
+            week_shifted: Number(row.week_shifted),
             due_today: Number(row.due_today),
             overdue: Number(row.overdue)
         });
@@ -581,11 +716,6 @@ app.get("/api/dashboard/summary", async (req, res) => {
 
 // ===============================
 // DASHBOARD: DOER PERFORMANCE
-//
-// UPDATED: accepts optional ?from=&to= the same way. The date
-// filter lives in the LEFT JOIN condition (not a WHERE clause) so
-// a doer with zero tasks in the selected range still appears with
-// zeros, instead of disappearing from the list.
 // ===============================
 
 app.get("/api/dashboard/doers", async (req, res) => {
@@ -601,7 +731,8 @@ app.get("/api/dashboard/doers", async (req, res) => {
                 u.name,
                 COUNT(t.id) AS total_assigned,
                 COUNT(t.id) FILTER (WHERE t.status = 'Completed') AS completed,
-                COUNT(t.id) FILTER (WHERE t.status = 'Pending') AS pending
+                COUNT(t.id) FILTER (WHERE t.status = 'Pending') AS pending,
+                COUNT(t.id) FILTER (WHERE t.status = 'Week Shifted') AS week_shifted
             FROM users u
             LEFT JOIN tasks t
                 ON t.user_id = u.id
@@ -621,6 +752,7 @@ app.get("/api/dashboard/doers", async (req, res) => {
                 total_assigned: total,
                 completed,
                 pending: Number(row.pending),
+                week_shifted: Number(row.week_shifted),
                 completion_percentage:
                     total > 0
                         ? Math.round((completed / total) * 100)
@@ -646,8 +778,6 @@ app.get("/api/dashboard/doers", async (req, res) => {
 
 // ===============================
 // DASHBOARD: REVISION STATISTICS
-//
-// UPDATED: accepts optional ?from=&to= the same way.
 // ===============================
 
 app.get("/api/dashboard/revisions", async (req, res) => {
@@ -691,10 +821,9 @@ app.get("/api/dashboard/revisions", async (req, res) => {
 // DASHBOARD: TODAY'S PRIORITY
 // (due today + overdue task lists)
 //
-// Unchanged and intentionally NOT affected by the dashboard date
-// filter - "due today" / "overdue" are real-time operational
-// flags, not a historical reporting period, so they always reflect
-// right now regardless of which range is selected above them.
+// Intentionally NOT affected by the dashboard date filter - these
+// are real-time operational flags, not a historical reporting
+// period.
 // ===============================
 
 app.get("/api/dashboard/priority", async (req, res) => {
@@ -708,12 +837,13 @@ app.get("/api/dashboard/priority", async (req, res) => {
                 u.name AS doer_name,
                 t.task,
                 t.planned_date,
+                t.priority,
                 t.total_revisions
             FROM tasks t
             LEFT JOIN users u ON t.user_id = u.id
             WHERE t.status = 'Pending'
               AND t.planned_date = CURRENT_DATE
-            ORDER BY t.id DESC
+            ORDER BY ${TASK_PRIORITY_ORDER_SQL}, t.id DESC
         `);
 
         const overdue = await pool.query(`
@@ -723,12 +853,13 @@ app.get("/api/dashboard/priority", async (req, res) => {
                 u.name AS doer_name,
                 t.task,
                 t.planned_date,
+                t.priority,
                 t.total_revisions
             FROM tasks t
             LEFT JOIN users u ON t.user_id = u.id
             WHERE t.status = 'Pending'
               AND t.planned_date < CURRENT_DATE
-            ORDER BY t.planned_date ASC
+            ORDER BY ${TASK_PRIORITY_ORDER_SQL}, t.planned_date ASC
         `);
 
         res.json({
@@ -751,11 +882,6 @@ app.get("/api/dashboard/priority", async (req, res) => {
 
 // ===============================
 // DASHBOARD: SINGLE DOER - COMPLETE HISTORY
-//
-// NEW. Powers the "Doer History" modal opened by clicking a name in
-// Doer Performance. Optional ?from=&to= narrows it; called with
-// neither (the modal's default) it returns the doer's full history
-// from the beginning, as requested.
 // ===============================
 
 app.get("/api/dashboard/doers/:id/history", async (req, res) => {
@@ -783,6 +909,7 @@ app.get("/api/dashboard/doers/:id/history", async (req, res) => {
                 COUNT(*) AS total,
                 COUNT(*) FILTER (WHERE status = 'Completed') AS completed,
                 COUNT(*) FILTER (WHERE status = 'Pending') AS pending,
+                COUNT(*) FILTER (WHERE status = 'Week Shifted') AS week_shifted,
                 COUNT(*) FILTER (WHERE total_revisions > 0) AS revised,
                 COUNT(*) FILTER (
                     WHERE status = 'Pending'
@@ -804,6 +931,8 @@ app.get("/api/dashboard/doers/:id/history", async (req, res) => {
                 task,
                 created_at,
                 planned_date,
+                actual_date,
+                priority,
                 status,
                 total_revisions,
                 updated_at
@@ -819,6 +948,7 @@ app.get("/api/dashboard/doers/:id/history", async (req, res) => {
                 total,
                 completed,
                 pending: Number(row.pending),
+                week_shifted: Number(row.week_shifted),
                 revised: Number(row.revised),
                 overdue: Number(row.overdue),
                 completion_percentage:
