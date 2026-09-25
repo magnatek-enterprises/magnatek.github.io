@@ -6,6 +6,27 @@ let revisingTaskId = null;
 let dashboardRange = { from: null, to: null };
 let doerHistoryState = { id: null, name: null, from: null, to: null };
 
+// Cached list of doers (id, name, phone) - used by the Tasks/Daily
+// Pending doer filters and the WhatsApp feature.
+let doersCache = [];
+
+// Current Tasks-view filter state. status defaults to "Pending" to
+// match the previous behaviour of this screen.
+let taskFilters = {
+    status: "Pending",
+    doerId: "",
+    priority: "All",
+    due: null,
+    range: { from: null, to: null }
+};
+
+let dailyPendingState = {
+    doerId: null,
+    doerName: null,
+    doerPhone: null,
+    tasks: []
+};
+
 
 // =====================================================
 // PAGE LOAD
@@ -26,11 +47,16 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     loadUsers();
+    loadDoerFilterOptions();
 
     // Dashboard defaults to the current week (Monday - Sunday, IST).
     dashboardRange = computeRangeForKey("thisWeek");
     updateShowingLabel("dashboardShowingLabel", dashboardRange);
     loadDashboard();
+
+    // Tasks view defaults to All Time / Pending, matching the
+    // previous behaviour (Pending only) but with no date restriction.
+    taskFilters.range = computeRangeForKey("allTime");
 
     // Close any modal on backdrop click or Escape.
     document.querySelectorAll(".modal-overlay").forEach(overlay => {
@@ -167,6 +193,17 @@ function formatDateTime(value) {
     });
 }
 
+// Historical rows can have actual_date / priority as NULL. This is
+// intentional (see project rules) - always render NULL as "—",
+// never invent a value.
+function formatDateOrDash(value) {
+    return value ? formatDate(value) : "—";
+}
+
+function priorityOrDash(value) {
+    return value || null;
+}
+
 function updateShowingLabel(elementId, range) {
     const el = document.getElementById(elementId);
     if (!el) return;
@@ -213,17 +250,34 @@ function isDueToday(task) {
     return task.status === "Pending" && task.planned_date && task.planned_date.split("T")[0] === todayISO();
 }
 
+// Status badges. Completed = green, Week Shifted = yellow, Pending
+// = red. Overdue gets its own visually stronger red treatment so it
+// is never confused with a plain Pending task.
 function statusBadge(task) {
     if (task.status === "Completed") {
         return `<span class="badge completed">Completed</span>`;
     }
+    if (task.status === "Week Shifted") {
+        return `<span class="badge week-shifted">Week Shifted</span>`;
+    }
     if (isOverdue(task)) {
-        return `<span class="badge overdue">Overdue</span>`;
+        return `<span class="badge overdue">⚠ Overdue</span>`;
     }
     if (isDueToday(task)) {
         return `<span class="badge due-today">Due Today</span>`;
     }
     return `<span class="badge pending">Pending</span>`;
+}
+
+// Priority is visually separate from status (a small square chip,
+// not a status pill) so the two never get confused. Historical NULL
+// priority always renders as "—", never guessed at.
+function priorityBadge(priority) {
+    if (!priority) {
+        return `<span class="priority-chip none">—</span>`;
+    }
+    const cls = priority.toLowerCase();
+    return `<span class="priority-chip ${cls}">${escapeHTML(priority)}</span>`;
 }
 
 function showToast(message, type = "default") {
@@ -291,11 +345,15 @@ function showView(viewId, button) {
     if (viewId === "dashboard") {
         loadDashboard();
     }
+
+    if (viewId === "dailyPending") {
+        loadDoerFilterOptions();
+    }
 }
 
 
 // =====================================================
-// LOAD USERS (doer dropdown)
+// LOAD USERS (Add Task doer dropdown)
 // =====================================================
 
 async function loadUsers() {
@@ -330,6 +388,55 @@ async function loadUsers() {
 
 
 // =====================================================
+// LOAD DOERS (Task filter + Daily Pending selector)
+// =====================================================
+
+async function loadDoerFilterOptions() {
+
+    const taskDoerFilter = document.getElementById("taskDoerFilter");
+    const dailyPendingSelect = document.getElementById("dailyPendingDoerSelect");
+
+    if (doersCache.length > 0) {
+        populateDoerSelects();
+        return;
+    }
+
+    try {
+
+        const response = await fetch(`${API}/api/doers`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        doersCache = await response.json();
+        populateDoerSelects();
+
+    } catch (error) {
+
+        console.error("Failed to load doers:", error);
+
+        if (taskDoerFilter) taskDoerFilter.innerHTML = `<option value="">All Doers</option>`;
+        if (dailyPendingSelect) dailyPendingSelect.innerHTML = `<option value="">Unable to load doers</option>`;
+
+    }
+}
+
+function populateDoerSelects() {
+
+    const taskDoerFilter = document.getElementById("taskDoerFilter");
+    const dailyPendingSelect = document.getElementById("dailyPendingDoerSelect");
+
+    if (taskDoerFilter) {
+        taskDoerFilter.innerHTML = `<option value="">All Doers</option>` +
+            doersCache.map(d => `<option value="${d.id}">${escapeHTML(d.name)}</option>`).join("");
+    }
+
+    if (dailyPendingSelect) {
+        dailyPendingSelect.innerHTML = `<option value="">Select a doer…</option>` +
+            doersCache.map(d => `<option value="${d.id}">${escapeHTML(d.name)}</option>`).join("");
+    }
+}
+
+
+// =====================================================
 // ADD TASK
 // =====================================================
 
@@ -338,6 +445,7 @@ async function addTask() {
     const user_id = document.getElementById("doerSelect").value;
     const planned_date = document.getElementById("plannedDate").value;
     const task = document.getElementById("taskDescription").value.trim();
+    const priority = document.getElementById("prioritySelect").value;
     const message = document.getElementById("addMessage");
     const btn = document.getElementById("addTaskBtn");
 
@@ -363,7 +471,7 @@ async function addTask() {
         const response = await fetch(`${API}/api/tasks`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ user_id, task, planned_date })
+            body: JSON.stringify({ user_id, task, planned_date, priority })
         });
 
         const data = await response.json();
@@ -378,6 +486,7 @@ async function addTask() {
         document.getElementById("doerSelect").value = "";
         document.getElementById("plannedDate").value = "";
         document.getElementById("taskDescription").value = "";
+        document.getElementById("prioritySelect").value = "Medium";
 
         showToast("Task added successfully.", "success");
 
@@ -397,8 +506,157 @@ async function addTask() {
 
 
 // =====================================================
-// LOAD ALL PENDING TASKS
+// TASKS VIEW - FILTERS
 // =====================================================
+
+function onTaskFiltersChange() {
+
+    taskFilters.status = document.getElementById("taskStatusFilter").value;
+    taskFilters.doerId = document.getElementById("taskDoerFilter").value;
+    taskFilters.priority = document.getElementById("taskPriorityFilter").value;
+
+    // A manual filter change always means "show me this exact set",
+    // so any Due Today / Overdue quick-filter from a dashboard card
+    // click is cleared.
+    taskFilters.due = null;
+
+    updateTasksPageSub();
+    loadTasks();
+}
+
+function onTaskRangeChange() {
+
+    const key = document.getElementById("taskRangeSelect").value;
+    const customWrap = document.getElementById("taskCustomRange");
+
+    if (key === "custom") {
+        customWrap.classList.add("show");
+        return;
+    }
+
+    customWrap.classList.remove("show");
+
+    taskFilters.range = computeRangeForKey(key);
+    loadTasks();
+}
+
+function applyTaskCustomRange() {
+
+    const from = document.getElementById("taskFromInput").value;
+    const to = document.getElementById("taskToInput").value;
+
+    if (!from || !to) {
+        showToast("Please choose both a from and a to date.", "error");
+        return;
+    }
+
+    if (from > to) {
+        showToast("The from date must be before the to date.", "error");
+        return;
+    }
+
+    taskFilters.range = { from, to };
+    loadTasks();
+}
+
+function updateTasksPageSub() {
+
+    const sub = document.getElementById("tasksPageSub");
+    if (!sub) return;
+
+    if (taskFilters.due === "today") {
+        sub.textContent = "Tasks due today.";
+    } else if (taskFilters.due === "overdue") {
+        sub.textContent = "Overdue tasks across the team.";
+    } else if (taskFilters.status === "All") {
+        sub.textContent = "All tasks across the team.";
+    } else {
+        sub.textContent = `${taskFilters.status} tasks across the team.`;
+    }
+}
+
+// Sets the Tasks-view filters to match a dashboard card and switches
+// to that view. Counts always come from the API - nothing here is
+// hardcoded.
+function onStatCardClick(card) {
+
+    taskFilters.due = null;
+    taskFilters.doerId = "";
+    taskFilters.priority = "All";
+    taskFilters.range = { from: dashboardRange.from, to: dashboardRange.to };
+
+    switch (card) {
+        case "Total":
+            taskFilters.status = "All";
+            break;
+        case "Completed":
+            taskFilters.status = "Completed";
+            break;
+        case "Pending":
+            taskFilters.status = "Pending";
+            break;
+        case "WeekShifted":
+            taskFilters.status = "Week Shifted";
+            break;
+        case "DueToday":
+            taskFilters.status = "Pending";
+            taskFilters.due = "today";
+            taskFilters.range = { from: null, to: null };
+            break;
+        case "Overdue":
+            taskFilters.status = "Pending";
+            taskFilters.due = "overdue";
+            taskFilters.range = { from: null, to: null };
+            break;
+    }
+
+    // Reflect the new state back into the Tasks view controls.
+    const statusSelect = document.getElementById("taskStatusFilter");
+    const doerSelect = document.getElementById("taskDoerFilter");
+    const prioritySelect = document.getElementById("taskPriorityFilter");
+    const rangeSelect = document.getElementById("taskRangeSelect");
+    const customWrap = document.getElementById("taskCustomRange");
+
+    if (statusSelect) statusSelect.value = taskFilters.status;
+    if (doerSelect) doerSelect.value = "";
+    if (prioritySelect) prioritySelect.value = "All";
+    if (rangeSelect) {
+        rangeSelect.value = taskFilters.range.from ? "custom" : "allTime";
+    }
+    if (customWrap) customWrap.classList.remove("show");
+
+    document.querySelectorAll(".stat-card").forEach(el => el.classList.remove("active"));
+    const activeCard = document.querySelector(`.stat-card[data-card="${card}"]`);
+    if (activeCard) activeCard.classList.add("active");
+
+    updateTasksPageSub();
+
+    const tasksNav = document.querySelector('.nav-link[data-view="tasks"]');
+    showView("tasks", tasksNav);
+}
+
+
+// =====================================================
+// LOAD TASKS (Tasks view)
+// =====================================================
+
+function buildTaskQuery() {
+
+    const params = new URLSearchParams();
+
+    params.set("status", taskFilters.status || "Pending");
+
+    if (taskFilters.doerId) params.set("doer_id", taskFilters.doerId);
+    if (taskFilters.priority && taskFilters.priority !== "All") params.set("priority", taskFilters.priority);
+    if (taskFilters.due) params.set("due", taskFilters.due);
+
+    if (!taskFilters.due && taskFilters.range && taskFilters.range.from && taskFilters.range.to) {
+        params.set("from", taskFilters.range.from);
+        params.set("to", taskFilters.range.to);
+    }
+
+    return `?${params.toString()}`;
+}
 
 async function loadTasks() {
 
@@ -406,18 +664,18 @@ async function loadTasks() {
 
     try {
 
-        const response = await fetch(`${API}/api/tasks`);
+        const response = await fetch(`${API}/api/tasks${buildTaskQuery()}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
         allTasks = await response.json();
-        displayTasks(allTasks);
+        filterTasks();
 
     } catch (error) {
 
         console.error("Failed to fetch tasks:", error);
 
         if (table) {
-            table.innerHTML = `<tr><td colspan="7">${errorState(
+            table.innerHTML = `<tr><td colspan="9">${errorState(
                 "Couldn't load tasks",
                 "Check your connection and try again."
             )}</td></tr>`;
@@ -437,9 +695,9 @@ function displayTasks(tasks) {
     if (!table) return;
 
     if (!tasks || tasks.length === 0) {
-        table.innerHTML = `<tr><td colspan="7">${emptyState(
-            "No pending tasks",
-            "Everything here is caught up, or your search didn't match anything."
+        table.innerHTML = `<tr><td colspan="9">${emptyState(
+            "No tasks found",
+            "Nothing matches the current filters."
         )}</td></tr>`;
         return;
     }
@@ -453,13 +711,15 @@ function displayTasks(tasks) {
         const code = task.task_code || task.id;
 
         row.innerHTML = `
-            <td class="mono">${escapeHTML(code)}</td>
-            <td>${escapeHTML(doerName)}</td>
-            <td>${escapeHTML(task.task || "")}</td>
-            <td>${formatDate(task.planned_date)}</td>
-            <td class="mono">${Number(task.total_revisions || 0)}</td>
-            <td>${statusBadge(task)}</td>
-            <td>
+            <td class="mono" data-label="Task ID">${escapeHTML(code)}</td>
+            <td data-label="Doer">${escapeHTML(doerName)}</td>
+            <td data-label="Task">${escapeHTML(task.task || "")}</td>
+            <td data-label="Actual Date">${formatDateOrDash(task.actual_date)}</td>
+            <td data-label="Planned Date">${formatDate(task.planned_date)}</td>
+            <td data-label="Priority">${priorityBadge(task.priority)}</td>
+            <td class="mono" data-label="Revisions">${Number(task.total_revisions || 0)}</td>
+            <td data-label="Status">${statusBadge(task)}</td>
+            <td data-label="Actions">
                 <div class="cell-actions">
                     <button class="action-btn done-btn" onclick="markDone(${task.id})">Done</button>
                     <button class="action-btn revise-btn" onclick="reviseTask(${task.id})">Revise</button>
@@ -475,7 +735,7 @@ function displayTasks(tasks) {
 
 
 // =====================================================
-// SEARCH
+// SEARCH (applied on top of whatever the server returned)
 // =====================================================
 
 function filterTasks() {
@@ -701,7 +961,7 @@ async function loadTodayTasks() {
                 <p class="task-desc">${escapeHTML(task.task || "")}</p>
 
                 <div class="task-card-foot">
-                    <span class="task-meta">${Number(task.total_revisions || 0)} revision${Number(task.total_revisions || 0) === 1 ? "" : "s"}</span>
+                    <span class="task-meta">${priorityBadge(task.priority)} · ${Number(task.total_revisions || 0)} revision${Number(task.total_revisions || 0) === 1 ? "" : "s"}</span>
                     <div class="task-actions">
                         <button class="action-btn done-btn" onclick="markDone(${task.id})">Done</button>
                         <button class="action-btn revise-btn" onclick="reviseTask(${task.id})">Revise</button>
@@ -816,6 +1076,10 @@ function renderSummary(summary) {
     document.getElementById("statTotal").textContent = summary.total ?? 0;
     document.getElementById("statCompleted").textContent = summary.completed ?? 0;
     document.getElementById("statPending").textContent = summary.pending ?? 0;
+
+    const weekShiftedEl = document.getElementById("statWeekShifted");
+    if (weekShiftedEl) weekShiftedEl.textContent = summary.week_shifted ?? 0;
+
     document.getElementById("statDueToday").textContent = summary.due_today ?? 0;
     document.getElementById("statOverdue").textContent = summary.overdue ?? 0;
 }
@@ -970,7 +1234,7 @@ function priorityItem(task) {
                 <div class="p-doer">${escapeHTML(task.doer_name || "")}</div>
                 <div class="p-task">${escapeHTML(task.task || "")}</div>
             </div>
-            <div class="p-date">${formatDate(task.planned_date)}</div>
+            <div class="p-date">${priorityBadge(task.priority)} · ${formatDate(task.planned_date)}</div>
         </div>
     `;
 }
@@ -1046,7 +1310,7 @@ async function loadDoerHistory() {
     const tableWrap = document.getElementById("doerHistoryTable");
 
     summaryWrap.innerHTML = `<div class="state-block"><div class="state-title">Loading…</div></div>`;
-    tableWrap.innerHTML = `<tr><td colspan="7"><div class="state-block"><div class="state-title">Loading…</div></div></td></tr>`;
+    tableWrap.innerHTML = `<tr><td colspan="8"><div class="state-block"><div class="state-title">Loading…</div></div></td></tr>`;
 
     const rangeQuery = buildRangeQuery({ from: doerHistoryState.from, to: doerHistoryState.to });
 
@@ -1086,6 +1350,10 @@ function renderDoerHistorySummary(summary) {
             <div class="stat-label">Pending</div>
             <div class="stat-value">${summary.pending}</div>
         </div>
+        <div class="stat-card week-shifted">
+            <div class="stat-label">Week Shifted</div>
+            <div class="stat-value">${summary.week_shifted ?? 0}</div>
+        </div>
         <div class="stat-card pending">
             <div class="stat-label">Revised</div>
             <div class="stat-value">${summary.revised}</div>
@@ -1093,10 +1361,6 @@ function renderDoerHistorySummary(summary) {
         <div class="stat-card overdue">
             <div class="stat-label">Overdue</div>
             <div class="stat-value">${summary.overdue}</div>
-        </div>
-        <div class="stat-card total">
-            <div class="stat-label">Completion %</div>
-            <div class="stat-value">${summary.completion_percentage}%</div>
         </div>
     `;
 }
@@ -1106,7 +1370,7 @@ function renderDoerHistoryTable(tasks) {
     const table = document.getElementById("doerHistoryTable");
 
     if (!tasks || tasks.length === 0) {
-        table.innerHTML = `<tr><td colspan="7">${emptyState(
+        table.innerHTML = `<tr><td colspan="8">${emptyState(
             "No tasks in this period",
             "Try a different date range."
         )}</td></tr>`;
@@ -1115,13 +1379,175 @@ function renderDoerHistoryTable(tasks) {
 
     table.innerHTML = tasks.map(task => `
         <tr>
-            <td class="mono">${escapeHTML(task.task_code || task.id)}</td>
-            <td>${escapeHTML(task.task || "")}</td>
-            <td>${formatDateTime(task.created_at)}</td>
-            <td>${formatDate(task.planned_date)}</td>
-            <td>${statusBadge(task)}</td>
-            <td class="mono">${Number(task.total_revisions || 0)}</td>
-            <td>${formatDateTime(task.updated_at)}</td>
+            <td class="mono" data-label="Task ID">${escapeHTML(task.task_code || task.id)}</td>
+            <td data-label="Task">${escapeHTML(task.task || "")}</td>
+            <td data-label="Assigned Date">${formatDateTime(task.created_at)}</td>
+            <td data-label="Planned Date">${formatDate(task.planned_date)}</td>
+            <td data-label="Priority">${priorityBadge(task.priority)}</td>
+            <td data-label="Status">${statusBadge(task)}</td>
+            <td class="mono" data-label="Revisions">${Number(task.total_revisions || 0)}</td>
+            <td data-label="Last Updated">${formatDateTime(task.updated_at)}</td>
         </tr>
     `).join("");
+}
+
+
+// =====================================================
+// DAILY PENDING TASKS
+// =====================================================
+
+async function onDailyPendingDoerChange() {
+
+    const select = document.getElementById("dailyPendingDoerSelect");
+    const doerId = select.value;
+
+    const emptyBlock = document.getElementById("dailyPendingEmpty");
+    const content = document.getElementById("dailyPendingContent");
+
+    if (!doerId) {
+        emptyBlock.style.display = "block";
+        content.style.display = "none";
+        return;
+    }
+
+    const doer = doersCache.find(d => String(d.id) === String(doerId));
+
+    dailyPendingState.doerId = doerId;
+    dailyPendingState.doerName = doer ? doer.name : "";
+    dailyPendingState.doerPhone = doer ? doer.phone : "";
+
+    emptyBlock.style.display = "none";
+    content.style.display = "block";
+
+    document.getElementById("dailyPendingDoerName").textContent = dailyPendingState.doerName;
+    document.getElementById("dailyPendingTable").innerHTML =
+        `<tr><td colspan="6"><div class="state-block"><div class="state-title">Loading…</div></div></td></tr>`;
+    document.getElementById("whatsappPreview").value = "";
+
+    try {
+
+        const params = new URLSearchParams({ status: "Pending", doer_id: doerId });
+        const response = await fetch(`${API}/api/tasks?${params.toString()}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const tasks = await response.json();
+        dailyPendingState.tasks = tasks;
+
+        renderDailyPendingTable(tasks);
+        document.getElementById("whatsappPreview").value = buildWhatsAppMessage(tasks);
+
+        const count = document.getElementById("dailyPendingCount");
+        count.textContent = tasks.length ? `${tasks.length} pending task${tasks.length === 1 ? "" : "s"}` : "";
+
+    } catch (error) {
+
+        console.error("DAILY PENDING ERROR:", error);
+        document.getElementById("dailyPendingTable").innerHTML =
+            `<tr><td colspan="6">${errorState("Couldn't load pending tasks", "Check your connection and try again.")}</td></tr>`;
+
+    }
+}
+
+function renderDailyPendingTable(tasks) {
+
+    const table = document.getElementById("dailyPendingTable");
+
+    if (!tasks || tasks.length === 0) {
+        table.innerHTML = `<tr><td colspan="6">${emptyState(
+            "No pending tasks",
+            "This doer has no pending tasks right now."
+        )}</td></tr>`;
+        return;
+    }
+
+    table.innerHTML = tasks.map(task => `
+        <tr>
+            <td class="mono" data-label="Task ID">${escapeHTML(task.task_code || task.id)}</td>
+            <td data-label="Actual Date">${formatDateOrDash(task.actual_date)}</td>
+            <td data-label="Task">${escapeHTML(task.task || "")}</td>
+            <td data-label="Planned Date">${formatDate(task.planned_date)}</td>
+            <td data-label="Priority">${priorityBadge(task.priority)}</td>
+            <td data-label="Status">${statusBadge(task)}</td>
+        </tr>
+    `).join("");
+}
+
+// Builds a clean, practical WhatsApp message from the doer's
+// pending tasks, sorted High -> Medium -> Low (historical
+// NULL-priority tasks, if any, come last with no bracket label).
+function buildWhatsAppMessage(tasks) {
+
+    if (!tasks || tasks.length === 0) {
+        return `Daily Pending Tasks\n\nNo pending tasks right now. 🎉`;
+    }
+
+    const lines = tasks.map((task, index) => {
+        const label = task.priority ? `[${task.priority.toUpperCase()}] ` : "";
+        return `${index + 1}. ${label}${task.task || ""}`;
+    });
+
+    return `Daily Pending Tasks\n\n${lines.join("\n")}`;
+}
+
+function copyWhatsAppMessage() {
+
+    const textarea = document.getElementById("whatsappPreview");
+
+    if (!textarea.value) {
+        showToast("There's no message to copy yet.", "error");
+        return;
+    }
+
+    textarea.select();
+    textarea.setSelectionRange(0, 99999);
+
+    navigator.clipboard.writeText(textarea.value)
+        .then(() => showToast("Message copied.", "success"))
+        .catch(() => {
+            // Fallback for browsers without clipboard API access.
+            try {
+                document.execCommand("copy");
+                showToast("Message copied.", "success");
+            } catch (err) {
+                showToast("Couldn't copy automatically - please copy manually.", "error");
+            }
+        });
+}
+
+// Normalizes a stored phone number into a wa.me-compatible digit
+// string. Assumes a 10-digit Indian mobile number needs the +91
+// country code prefixed; leaves already-prefixed numbers untouched.
+function normalizePhoneForWhatsApp(phone) {
+
+    if (!phone) return null;
+
+    const digits = phone.replace(/\D/g, "");
+
+    if (digits.length === 10) return `91${digits}`;
+    if (digits.length > 10) return digits;
+
+    return null;
+}
+
+function openWhatsApp() {
+
+    const message = document.getElementById("whatsappPreview").value;
+
+    if (!message) {
+        showToast("There's no message to send yet.", "error");
+        return;
+    }
+
+    const phone = normalizePhoneForWhatsApp(dailyPendingState.doerPhone);
+
+    const encoded = encodeURIComponent(message);
+    const url = phone
+        ? `https://wa.me/${phone}?text=${encoded}`
+        : `https://wa.me/?text=${encoded}`;
+
+    if (!phone) {
+        showToast("No valid phone number on file - opening WhatsApp without a recipient.", "default");
+    }
+
+    window.open(url, "_blank");
 }
