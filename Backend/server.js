@@ -157,7 +157,10 @@ function toISODate(value) {
 
 // Accepts any of the wordings the frontend/spec use for the two
 // WKNDOT outcomes and normalizes them to the two values actually
-// stored in wkndot_reviews.review_status.
+// stored in wkndot_reviews.decision ("Negative" / "Non-Negative").
+// The API's JSON field is called "review_status" for backward
+// compatibility with the existing frontend contract, but the
+// underlying column is "decision" (see the wkndot_reviews schema).
 function normalizeWkndotDecision(value) {
     if (value === "Negative" || value === "MARK_NEGATIVE") return "Negative";
     if (value === "Non-Negative" || value === "DO_NOT_MARK_NEGATIVE") return "Non-Negative";
@@ -544,6 +547,8 @@ app.get("/api/tasks/:id", async (req, res) => {
 
 app.put("/api/tasks/:id/revise", async (req, res) => {
 
+    const client = await pool.connect();
+
     try {
 
         const { id } = req.params;
@@ -555,26 +560,37 @@ app.put("/api/tasks/:id/revise", async (req, res) => {
         } = req.body;
 
 
-        // Reject past dates server-side too.
-        if (planned_date) {
+        if (!planned_date) {
 
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
+            client.release();
 
-            const chosenDate = new Date(planned_date + "T00:00:00");
-
-            if (chosenDate < today) {
-
-                return res.status(400).json({
-                    error: "Planned date cannot be in the past"
-                });
-
-            }
+            return res.status(400).json({
+                error: "A new planned date is required"
+            });
 
         }
 
 
-        const taskResult = await pool.query(`
+        // Reject past dates server-side too.
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const chosenDate = new Date(planned_date + "T00:00:00");
+
+        if (chosenDate < today) {
+
+            client.release();
+
+            return res.status(400).json({
+                error: "Planned date cannot be in the past"
+            });
+
+        }
+
+
+        await client.query("BEGIN");
+
+        const taskResult = await client.query(`
             SELECT
                 id,
                 user_id,
@@ -584,10 +600,14 @@ app.put("/api/tasks/:id/revise", async (req, res) => {
                 status
             FROM tasks
             WHERE id = $1
+            FOR UPDATE
         `, [id]);
 
 
         if (taskResult.rows.length === 0) {
+
+            await client.query("ROLLBACK");
+            client.release();
 
             return res.status(404).json({
                 error: "Task not found"
@@ -597,16 +617,18 @@ app.put("/api/tasks/:id/revise", async (req, res) => {
 
         const currentTask = taskResult.rows[0];
 
-        // Fallback for any task that predates the original_planned_date
-        // column and was not covered by the migration's backfill for
-        // some reason - never let this be NULL going into the WKNDOT
-        // week calculation below.
+        // If this task predates the original_planned_date column (or
+        // it was never set for some other reason), its true original
+        // commitment is whatever planned_date currently holds, BEFORE
+        // this revision overwrites it below. This is written back to
+        // the row further down (via COALESCE), never overwriting an
+        // original_planned_date that already exists.
         const originalDate = currentTask.original_planned_date || currentTask.planned_date;
 
 
         // ---- WKNDOT: does this revision need a decision? ----
 
-        const weekResult = await pool.query(`
+        const weekResult = await client.query(`
             SELECT
                 ${weekStartSQL("$1::date")} AS task_week_start,
                 ${weekEndSQL("$1::date")}   AS task_week_end,
@@ -624,8 +646,8 @@ app.put("/api/tasks/:id/revise", async (req, res) => {
 
         if (needsWkndotDecision) {
 
-            const existing = await pool.query(`
-                SELECT review_status
+            const existing = await client.query(`
+                SELECT decision
                 FROM wkndot_reviews
                 WHERE task_id = $1 AND week_start = $2 AND week_end = $3
             `, [id, taskWeekStart, taskWeekEnd]);
@@ -634,13 +656,19 @@ app.put("/api/tasks/:id/revise", async (req, res) => {
 
                 // Already classified earlier this week - never ask
                 // again, just carry the existing decision through.
-                wkndotOutcome = existing.rows[0].review_status;
+                wkndotOutcome = existing.rows[0].decision;
 
             } else {
 
                 const normalizedDecision = normalizeWkndotDecision(wkndot_decision);
 
                 if (!normalizedDecision) {
+
+                    // Nothing has been written yet, so a plain
+                    // ROLLBACK is enough - this is not a failure, it's
+                    // the frontend's cue to show the decision prompt.
+                    await client.query("ROLLBACK");
+                    client.release();
 
                     return res.status(409).json({
                         error: "A WKNDOT decision is required for this revision",
@@ -651,16 +679,16 @@ app.put("/api/tasks/:id/revise", async (req, res) => {
 
                 }
 
-                await pool.query(`
+                await client.query(`
                     INSERT INTO wkndot_reviews
-                        (task_id, doer_id, week_start, week_end, review_status, review_date, decided_mid_week)
+                        (task_id, week_start, week_end, decision)
                     VALUES
-                        ($1, $2, $3, $4, $5, CURRENT_DATE, TRUE)
+                        ($1, $2, $3, $4)
                     ON CONFLICT (task_id, week_start, week_end)
                     DO UPDATE SET
-                        review_status = EXCLUDED.review_status,
+                        decision = EXCLUDED.decision,
                         updated_at = CURRENT_TIMESTAMP
-                `, [id, currentTask.user_id, taskWeekStart, taskWeekEnd, normalizedDecision]);
+                `, [id, taskWeekStart, taskWeekEnd, normalizedDecision]);
 
                 wkndotOutcome = normalizedDecision;
 
@@ -673,7 +701,7 @@ app.put("/api/tasks/:id/revise", async (req, res) => {
             currentTask.total_revisions + 1;
 
 
-        await pool.query(`
+        await client.query(`
             INSERT INTO task_revisions
             (
                 task_id,
@@ -692,23 +720,29 @@ app.put("/api/tasks/:id/revise", async (req, res) => {
         ]);
 
 
-        // original_planned_date is deliberately NOT in this SET list -
-        // it must never change once a task exists.
-        const result = await pool.query(`
+        // original_planned_date is only ever written here via
+        // COALESCE - if it already has a value, it is left exactly
+        // as-is; it is only backfilled when it was NULL going in
+        // (see the comment on `originalDate` above).
+        const result = await client.query(`
             UPDATE tasks
             SET
                 planned_date = $1,
                 total_revisions = $2,
                 status = 'Week Shifted',
+                original_planned_date = COALESCE(original_planned_date, $4),
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = $3
             RETURNING *
         `, [
             planned_date,
             newRevisionNumber,
-            id
+            id,
+            currentTask.planned_date
         ]);
 
+
+        await client.query("COMMIT");
 
         res.json({
             success: true,
@@ -726,11 +760,20 @@ app.put("/api/tasks/:id/revise", async (req, res) => {
 
     } catch (error) {
 
-        console.error(error);
+        await client.query("ROLLBACK").catch(() => {});
 
+        console.error("REVISE TASK ERROR:", error);
+
+        // Real error message included (not just a generic string) so
+        // this is actually debuggable from the frontend/network tab.
         res.status(500).json({
-            error: "Failed to revise task"
+            error: "Failed to revise task",
+            detail: error.message
         });
+
+    } finally {
+
+        client.release();
 
     }
 
@@ -815,9 +858,7 @@ const WKNDOT_TASK_ROW_SQL = `
         t.priority,
         t.total_revisions,
         t.updated_at,
-        wr.review_status,
-        wr.review_date,
-        wr.decided_mid_week,
+        wr.decision AS review_status,
         (t.status = 'Completed' AND t.updated_at::date <= t.original_planned_date) AS completed_on_time,
         (t.status = 'Completed' AND t.updated_at::date > t.original_planned_date) AS completed_late,
         CASE
@@ -875,7 +916,8 @@ app.get("/api/wkndot/tasks", async (req, res) => {
         console.error(error);
 
         res.status(500).json({
-            error: "Failed to fetch WKNDOT tasks"
+            error: "Failed to fetch WKNDOT tasks",
+            detail: error.message
         });
 
     }
@@ -904,7 +946,7 @@ app.get("/api/wkndot/decision", async (req, res) => {
         }
 
         const result = await pool.query(`
-            SELECT review_status, review_date, decided_mid_week
+            SELECT decision AS review_status
             FROM wkndot_reviews
             WHERE task_id = $1 AND week_start = $2 AND week_end = $3
         `, [task_id, week_start, week_end]);
@@ -920,7 +962,8 @@ app.get("/api/wkndot/decision", async (req, res) => {
         console.error(error);
 
         res.status(500).json({
-            error: "Failed to fetch WKNDOT decision"
+            error: "Failed to fetch WKNDOT decision",
+            detail: error.message
         });
 
     }
@@ -943,7 +986,7 @@ app.post("/api/wkndot/review", async (req, res) => {
 
     try {
 
-        const { task_id, week_start, week_end, review_status, reviewed_by } = req.body;
+        const { task_id, week_start, week_end, review_status } = req.body;
 
         const normalizedDecision = normalizeWkndotDecision(review_status);
 
@@ -954,27 +997,24 @@ app.post("/api/wkndot/review", async (req, res) => {
         }
 
         const taskResult = await pool.query(`
-            SELECT id, user_id FROM tasks WHERE id = $1
+            SELECT id FROM tasks WHERE id = $1
         `, [task_id]);
 
         if (taskResult.rows.length === 0) {
             return res.status(404).json({ error: "Task not found" });
         }
 
-        const doer_id = taskResult.rows[0].user_id;
-
         const result = await pool.query(`
             INSERT INTO wkndot_reviews
-                (task_id, doer_id, week_start, week_end, review_status, review_date, decided_mid_week, reviewed_by)
+                (task_id, week_start, week_end, decision)
             VALUES
-                ($1, $2, $3, $4, $5, CURRENT_DATE, FALSE, $6)
+                ($1, $2, $3, $4)
             ON CONFLICT (task_id, week_start, week_end)
             DO UPDATE SET
-                review_status = EXCLUDED.review_status,
-                reviewed_by = EXCLUDED.reviewed_by,
+                decision = EXCLUDED.decision,
                 updated_at = CURRENT_TIMESTAMP
-            RETURNING *
-        `, [task_id, doer_id, week_start, week_end, normalizedDecision, reviewed_by || null]);
+            RETURNING task_id, week_start, week_end, decision AS review_status
+        `, [task_id, week_start, week_end, normalizedDecision]);
 
         res.json({
             success: true,
@@ -984,10 +1024,11 @@ app.post("/api/wkndot/review", async (req, res) => {
 
     } catch (error) {
 
-        console.error(error);
+        console.error("WKNDOT REVIEW SAVE ERROR:", error);
 
         res.status(500).json({
-            error: "Failed to save WKNDOT decision"
+            error: "Failed to save WKNDOT decision",
+            detail: error.message
         });
 
     }
@@ -1034,10 +1075,10 @@ app.get("/api/wkndot/summary", async (req, res) => {
                 COUNT(*) FILTER (
                     WHERE t.status = 'Completed' AND t.updated_at::date <= t.original_planned_date
                 ) AS completed_on_time,
-                COUNT(*) FILTER (WHERE wr.review_status = 'Negative') AS negative,
-                COUNT(*) FILTER (WHERE wr.review_status = 'Non-Negative') AS non_negative,
+                COUNT(*) FILTER (WHERE wr.decision = 'Negative') AS negative,
+                COUNT(*) FILTER (WHERE wr.decision = 'Non-Negative') AS non_negative,
                 COUNT(*) FILTER (
-                    WHERE wr.review_status IS NULL
+                    WHERE wr.decision IS NULL
                       AND NOT (t.status = 'Completed' AND t.updated_at::date <= t.original_planned_date)
                 ) AS pending_review,
                 ROUND(AVG(
@@ -1092,7 +1133,8 @@ app.get("/api/wkndot/summary", async (req, res) => {
         console.error(error);
 
         res.status(500).json({
-            error: "Failed to fetch WKNDOT summary"
+            error: "Failed to fetch WKNDOT summary",
+            detail: error.message
         });
 
     }
@@ -1137,10 +1179,10 @@ app.get("/api/wkndot/report", async (req, res) => {
                 COUNT(*) FILTER (
                     WHERE t.status = 'Completed' AND t.updated_at::date <= t.original_planned_date
                 ) AS completed_on_time,
-                COUNT(*) FILTER (WHERE wr.review_status = 'Negative') AS negative,
-                COUNT(*) FILTER (WHERE wr.review_status = 'Non-Negative') AS non_negative,
+                COUNT(*) FILTER (WHERE wr.decision = 'Negative') AS negative,
+                COUNT(*) FILTER (WHERE wr.decision = 'Non-Negative') AS non_negative,
                 COUNT(*) FILTER (
-                    WHERE wr.review_status IS NULL
+                    WHERE wr.decision IS NULL
                       AND NOT (t.status = 'Completed' AND t.updated_at::date <= t.original_planned_date)
                 ) AS pending_review,
                 ROUND(AVG(
@@ -1212,7 +1254,8 @@ app.get("/api/wkndot/report", async (req, res) => {
         console.error(error);
 
         res.status(500).json({
-            error: "Failed to build WKNDOT report"
+            error: "Failed to build WKNDOT report",
+            detail: error.message
         });
 
     }
