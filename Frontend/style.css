@@ -1391,6 +1391,234 @@ button.stat-card.active {
 }
 
 /* =========================================================
+   WKNDOT (Weekly Work Not Done On Time)
+========================================================= */
+
+.wkndot-header-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+/* ---- Mid-week WKNDOT box, inside the Revise modal ---- */
+
+.wkndot-midweek-box {
+    margin: 4px 0 18px;
+    padding: 16px;
+    border: 1px solid var(--warning-tint);
+    background: var(--warning-tint);
+    border-radius: var(--radius);
+}
+
+.wkndot-midweek-label {
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--warning);
+    margin-bottom: 6px;
+}
+
+.wkndot-midweek-copy {
+    margin: 0 0 14px;
+    font-size: 13px;
+    color: var(--ink-soft);
+}
+
+.wkndot-choice-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.wkndot-choice-btn {
+    appearance: none;
+    flex: 1;
+    min-width: 180px;
+    border: 2px solid var(--border);
+    background: var(--white);
+    padding: 12px 14px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    text-align: center;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.wkndot-choice-btn.small {
+    flex: none;
+    min-width: 0;
+    padding: 7px 12px;
+    font-size: 12.5px;
+    border-width: 1px;
+}
+
+.wkndot-choice-btn.negative {
+    color: var(--danger);
+    border-color: #f3c6c0;
+}
+
+.wkndot-choice-btn.negative:hover,
+.wkndot-choice-btn.negative.selected {
+    background: var(--danger-tint);
+    border-color: var(--danger);
+}
+
+.wkndot-choice-btn.non-negative {
+    color: var(--success);
+    border-color: #bfe3d3;
+}
+
+.wkndot-choice-btn.non-negative:hover,
+.wkndot-choice-btn.non-negative.selected {
+    background: var(--success-tint);
+    border-color: var(--success);
+}
+
+.wkndot-existing-chip {
+    display: inline-block;
+    padding: 8px 14px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.wkndot-existing-chip.negative {
+    background: var(--danger-tint);
+    color: var(--danger);
+}
+
+.wkndot-existing-chip.non-negative {
+    background: var(--success-tint);
+    color: var(--success);
+}
+
+/* ---- WKNDOT review screen: decided/undecided chips + buttons ---- */
+
+.wkndot-decided-chip {
+    display: inline-block;
+    padding: 5px 10px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.wkndot-decided-chip.negative {
+    background: var(--danger-tint);
+    color: var(--danger);
+}
+
+.wkndot-decided-chip.non-negative {
+    background: var(--success-tint);
+    color: var(--success);
+}
+
+.wkndot-review-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+/* ---- Printable report header (hidden on screen, shown when printing) ---- */
+
+.wkndot-print-header {
+    display: none;
+}
+
+/* =========================================================
+   PRINT / PDF (WKNDOT report)
+
+   Only the WKNDOT view's summary + table are meant to be printed.
+   Everything else (header, nav, all other views, filters, buttons)
+   is hidden. The print-only header (logo, company, week, generated
+   date) is shown instead.
+========================================================= */
+
+@media print {
+
+    body * {
+        visibility: hidden;
+    }
+
+    #wkndot,
+    #wkndot * {
+        visibility: visible;
+    }
+
+    #wkndot {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        padding: 0 12mm;
+    }
+
+    .app-header,
+    .toast-stack,
+    .modal-overlay,
+    .wkndot-hide-print {
+        display: none !important;
+    }
+
+    .wkndot-print-header {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding-bottom: 14px;
+        margin-bottom: 16px;
+        border-bottom: 2px solid var(--ink);
+    }
+
+    .wkndot-print-logo {
+        height: 44px;
+    }
+
+    .wkndot-print-company {
+        font-size: 18px;
+        font-weight: 800;
+    }
+
+    .wkndot-print-title {
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--ink-soft);
+    }
+
+    .wkndot-print-meta {
+        font-size: 12px;
+        color: var(--ink-soft);
+        margin-top: 2px;
+    }
+
+    .wkndot-print-summary,
+    .wkndot-print-table {
+        break-inside: avoid;
+    }
+
+    .table-wrapper {
+        overflow-x: visible;
+        border: 1px solid #000;
+    }
+
+    table {
+        min-width: 0;
+        width: 100%;
+    }
+
+    .wkndot-review-actions {
+        display: none;
+    }
+
+    @page {
+        size: A4;
+        margin: 14mm;
+    }
+}
+
+
+/* =========================================================
    TOASTS
 ========================================================= */
 
@@ -1732,6 +1960,37 @@ button.stat-card.active {
 
     .toast {
         max-width: none;
+    }
+
+    /* ---- WKNDOT ---- */
+
+    .wkndot-header-actions {
+        width: 100%;
+        flex-direction: column;
+    }
+
+    .wkndot-header-actions button {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .wkndot-choice-row {
+        flex-direction: column;
+    }
+
+    .wkndot-choice-btn {
+        min-width: 0;
+        min-height: 46px;
+    }
+
+    .wkndot-review-actions {
+        flex-direction: column;
+        width: 100%;
+    }
+
+    .wkndot-review-actions .wkndot-choice-btn.small {
+        min-height: 40px;
+        width: 100%;
     }
 }
 

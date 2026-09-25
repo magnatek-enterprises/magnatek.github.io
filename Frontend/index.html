@@ -34,6 +34,7 @@
                 <button class="nav-link" data-view="dailyPending" onclick="showView('dailyPending', this)">Daily Pending</button>
                 <button class="nav-link" data-view="addTask" onclick="showView('addTask', this)">Add Task</button>
                 <button class="nav-link" data-view="followUp" onclick="showView('followUp', this)">Follow Up</button>
+                <button class="nav-link" data-view="wkndot" onclick="showView('wkndot', this)">WKNDOT</button>
             </nav>
 
         </div>
@@ -334,7 +335,6 @@
             </div>
 
             <div class="search-bar">
-                <input type="text" id="searchName" placeholder="Search by doer name…" onkeyup="filterTasks()">
                 <input type="text" id="searchTask" placeholder="Search by task…" onkeyup="filterTasks()">
             </div>
 
@@ -437,6 +437,69 @@
 
         </section>
 
+
+        <!-- ========================= -->
+        <!-- WKNDOT -->
+        <!-- Weekly Work Not Done On Time. Monday-Saturday weeks,
+             deliberately separate from the Dashboard's Mon-Sun
+             "This Week" filter. See app.js wkndotWeekOf(). -->
+        <!-- ========================= -->
+
+        <section id="wkndot" class="view">
+
+            <div class="page-head wkndot-hide-print">
+                <div>
+                    <h1>WKNDOT</h1>
+                    <p>Weekly Work Not Done On Time · Monday–Saturday review.</p>
+                </div>
+                <div class="wkndot-header-actions">
+                    <button class="ghost-btn" onclick="exportWkndotCSV()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        Export Excel
+                    </button>
+                    <button class="primary-btn" onclick="printWkndotReport()">Print / Save PDF</button>
+                </div>
+            </div>
+
+            <div class="card card-pad filter-bar section-gap wkndot-hide-print">
+                <div class="filter-row">
+                    <select id="wkndotWeekSelect" onchange="onWkndotWeekChange()">
+                        <option value="">Loading weeks…</option>
+                    </select>
+
+                    <select id="wkndotDoerSelect" onchange="onWkndotDoerChange()">
+                        <option value="">All Doers</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- PRINT-ONLY REPORT HEADER -->
+            <div class="wkndot-print-header">
+                <img src="assets/logo.png" alt="Magnatek" class="wkndot-print-logo">
+                <div>
+                    <div class="wkndot-print-company">Magnatek Enterprises</div>
+                    <div class="wkndot-print-title">WKNDOT Weekly Report</div>
+                    <div class="wkndot-print-meta">
+                        Week: <span id="wkndotPrintWeek"></span> ·
+                        Doer: <span id="wkndotPrintDoer"></span> ·
+                        Generated: <span id="wkndotPrintGenerated"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card-head wkndot-hide-print" style="margin-top:4px;">
+                <h2 id="wkndotWeekHeading">—</h2>
+                <span class="muted" id="wkndotDoerHeading"></span>
+            </div>
+
+            <div id="wkndotSummaryWrap" class="section-gap">
+                <div class="state-block"><div class="state-title">Loading…</div></div>
+            </div>
+
+            <div id="wkndotTasksWrap"></div>
+
+        </section>
+
     </main>
 
 
@@ -455,10 +518,17 @@
                 <input type="date" id="reviseDateInput">
             </div>
 
-            <div class="field" style="margin-bottom:0;">
+            <div class="field">
                 <label for="reviseNoteInput">Revision Note (optional)</label>
                 <textarea id="reviseNoteInput" placeholder="Reason for the change…" style="min-height:70px;"></textarea>
             </div>
+
+            <!-- WKNDOT mid-week decision. Hidden unless the task's
+                 ORIGINAL due date falls in the current Monday-Saturday
+                 WKNDOT week (see reviseTask() in app.js). Revision /
+                 Week Shifted and WKNDOT classification are always
+                 shown as two clearly separate things here. -->
+            <div class="wkndot-midweek-box" id="reviseWkndotSection" style="display:none;"></div>
 
             <div class="modal-actions">
                 <button class="secondary-btn" onclick="closeReviseModal()">Cancel</button>
