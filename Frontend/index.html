@@ -398,6 +398,13 @@
                         <span class="muted" id="dailyPendingCount"></span>
                     </div>
 
+                    <!-- The Doer dropdown above is already the doer
+                         filter - this is the only search box on this
+                         screen, and it only searches by task. -->
+                    <div class="search-bar">
+                        <input type="text" id="dailyPendingSearch" placeholder="Search by task…" onkeyup="filterDailyPending()">
+                    </div>
+
                     <div class="table-wrapper">
                         <table>
                             <thead>
@@ -408,6 +415,7 @@
                                     <th>Planned Date</th>
                                     <th>Priority</th>
                                     <th>Status</th>
+                                    <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="dailyPendingTable">
